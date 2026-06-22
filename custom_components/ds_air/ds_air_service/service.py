@@ -8,7 +8,8 @@ from .ctrl_enum import EnumDevice
 from .dao import Room, AirCon, AirConStatus, get_device_by_aircon, Sensor, STATUS_ATTR
 from .decoder import decoder, BaseResult
 from .display import display
-from .param import Param, HandShakeParam, HeartbeatParam, AirConControlParam, AirConQueryStatusParam, Sensor2InfoParam
+from .param import Param, HandShakeParam, HeartbeatParam, AirConControlParam, AirConQueryStatusParam, Sensor2InfoParam, \
+    AirConCleaningQueryParam, AirConCleaningControlParam
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,6 +151,8 @@ class Service:
     _heartbeat_thread = None
     _sensors = []  # type: typing.List[Sensor]
     _scan_interval = 5  # type: int
+    _cleaning_info_ready = False  # type: bool
+    _cleaning_selected = set()
 
     @staticmethod
     def init(host: str, port: int, scan_interval: int):
@@ -181,6 +184,11 @@ class Service:
                     i.alias = j.alias
                     if i.unit_id:
                         i.alias += str(i.unit_id)
+        Service._cleaning_info_ready = False
+        Service.send_msg(AirConCleaningQueryParam())
+        deadline = time.time() + 3
+        while not Service._cleaning_info_ready and time.time() < deadline:
+            time.sleep(0.1)
         Service._ready = True
 
     @staticmethod
@@ -198,6 +206,8 @@ class Service:
             Service._sensor_hook = []
             Service._heartbeat_thread = None
             Service._sensors = []
+            Service._cleaning_info_ready = False
+            Service._cleaning_selected = set()
             Service._ready = False
 
     @staticmethod
@@ -215,6 +225,29 @@ class Service:
     def control(aircon: AirCon, status: AirConStatus):
         p = AirConControlParam(aircon, status)
         Service.send_msg(p)
+
+    @staticmethod
+    def select_heat_exchange_cleaning(aircon: AirCon, selected: bool):
+        if selected:
+            Service._cleaning_selected.add(aircon.unique_id)
+        else:
+            Service._cleaning_selected.discard(aircon.unique_id)
+
+    @staticmethod
+    def is_heat_exchange_cleaning_selected(aircon: AirCon):
+        return aircon.unique_id in Service._cleaning_selected
+
+    @staticmethod
+    def start_selected_heat_exchange_cleaning():
+        aircons = [
+            i for i in Service.get_aircons()
+            if i.heat_exchange_cleaning_allow
+            and i.unique_id in Service._cleaning_selected
+        ]
+        if not aircons:
+            return
+        Service.send_msg(AirConCleaningControlParam(aircons, 1))
+        Service.send_msg(AirConCleaningQueryParam())
 
     @staticmethod
     def register_status_hook(device: AirCon, hook: typing.Callable):
@@ -296,6 +329,26 @@ class Service:
                         _log(str(e))
 
     @staticmethod
+    def set_cleaning_info(items: typing.List[dict]):
+        for item in items:
+            room = item.get("room")
+            unit = item.get("unit")
+            for aircon in Service.get_aircons():
+                if aircon.room_id == room and aircon.unit_id == unit:
+                    for attr in (
+                        "heat_exchange_cleaning_allow",
+                        "heat_exchange_cleaning_status",
+                        "heat_exchange_cleaning_percent",
+                        "heat_exchange_cleaning_phase_duration",
+                    ):
+                        if attr in item:
+                            setattr(aircon, attr, item[attr])
+                    if Service._ready:
+                        Service.update_aircon(get_device_by_aircon(aircon), room, unit, aircon=aircon)
+                    break
+        Service._cleaning_info_ready = True
+
+    @staticmethod
     def poll_status():
         for target, aircons in (
             (EnumDevice.NEWAIRCON, Service._new_aircons),
@@ -309,6 +362,7 @@ class Service:
                 Service.send_msg(p)
         p = Sensor2InfoParam()
         Service.send_msg(p)
+        Service.send_msg(AirConCleaningQueryParam())
 
     @staticmethod
     def update_aircon(target: EnumDevice, room: int, unit: int, **kwargs):

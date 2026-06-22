@@ -103,6 +103,46 @@ class GetGWInfoParam(SystemParam):
         SystemParam.__init__(self, EnumCmdType.SYS_GET_GW_INFO, True)
 
 
+class AirConCleaningQueryParam(SystemParam):
+    def __init__(self):
+        SystemParam.__init__(self, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_QUERY, True)
+        self._room_ids: typing.List[int] = []
+
+    def generate_subbody(self, s):
+        if not self._room_ids:
+            s.write1(255)
+            return
+        s.write1(len(self._room_ids))
+        for room_id in self._room_ids:
+            s.write1(room_id)
+            s.write1(1)
+            s.write1(0)
+
+    @property
+    def room_ids(self):
+        return self._room_ids
+
+
+class AirConCleaningControlParam(SystemParam):
+    def __init__(self, aircons: typing.List[AirCon], switch_status: int = 1):
+        SystemParam.__init__(self, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_SETTING, False)
+        self._aircons = aircons
+        self._switch_status = switch_status
+
+    def generate_subbody(self, s):
+        s.write1(len(self._aircons))
+        for aircon in self._aircons:
+            s.write1(aircon.room_id)
+            s.write1(aircon.unit_id)
+            s.write1(2)
+            s.write1(4)
+            s.write1(1)
+            s.write1(1)
+            s.write1(self._switch_status)
+            s.write1(0)
+            s.write1(0)
+
+
 class GetRoomInfoParam(SystemParam):
     def __init__(self):
         SystemParam.__init__(self, EnumCmdType.SYS_GET_ROOM_INFO, True)

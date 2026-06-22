@@ -66,6 +66,10 @@ class AirCon(Device):
         self.relax_mode = 0  # type: int
         self.sleep_mode = 0  # type: int
         self.ventilation_mode = 0  # type: int
+        self.heat_exchange_cleaning_allow = False  # type: bool
+        self.heat_exchange_cleaning_status = None  # type: Optional[int]
+        self.heat_exchange_cleaning_percent = None  # type: Optional[int]
+        self.heat_exchange_cleaning_phase_duration = None  # type: Optional[int]
         self.status = AirConStatus()  # type: AirConStatus
 
 

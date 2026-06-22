@@ -4,8 +4,9 @@ from typing import Optional
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import DeviceInfo
 
+from .cleaning_device import cleaning_device_info
 from .const import DOMAIN, SENSOR_TYPES
-from .ds_air_service.dao import Sensor, UNINITIALIZED_VALUE
+from .ds_air_service.dao import AirCon, Sensor, UNINITIALIZED_VALUE
 from .ds_air_service.service import Service
 
 
@@ -16,6 +17,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         for key in SENSOR_TYPES:
             if config_entry.data.get(key):
                 entities.append(DsSensor(device, key))
+    for aircon in Service.get_aircons():
+        if aircon.heat_exchange_cleaning_allow:
+            entities.append(DsAirHeatExchangeCleaningProgressSensor(aircon))
     async_add_entities(entities)
 
 
@@ -104,3 +108,49 @@ class DsSensor(SensorEntity):
         if not not_update:
             self.schedule_update_ha_state()
         return True
+
+
+class DsAirHeatExchangeCleaningProgressSensor(SensorEntity):
+    """Progress sensor for one DS-AIR self-cleaning target."""
+
+    def __init__(self, aircon: AirCon):
+        self._device_info = aircon
+        self._attr_unique_id = f"{aircon.unique_id}_heat_exchange_cleaning_progress"
+        self._attr_name = f"{aircon.alias} 自清洁进度"
+        self._attr_icon = "mdi:progress-clock"
+        self._attr_native_unit_of_measurement = "%"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+        Service.register_status_hook(aircon, self._status_change_hook)
+
+    @property
+    def should_poll(self):
+        return False
+
+    @property
+    def available(self):
+        return self._device_info.heat_exchange_cleaning_allow
+
+    @property
+    def native_value(self):
+        if self._device_info.heat_exchange_cleaning_percent is None:
+            return 0
+        return self._device_info.heat_exchange_cleaning_percent
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "status_code": self._device_info.heat_exchange_cleaning_status,
+            "phase_duration": self._device_info.heat_exchange_cleaning_phase_duration,
+        }
+
+    @property
+    def device_info(self) -> Optional[DeviceInfo]:
+        return cleaning_device_info()
+
+    def _status_change_hook(self, **kwargs):
+        if kwargs.get("aircon") is not None:
+            aircon: AirCon = kwargs["aircon"]
+            aircon.status = self._device_info.status
+            self._device_info = aircon
+        self.schedule_update_ha_state()

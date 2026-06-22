@@ -58,7 +58,15 @@ _FAN_BY_CAPABILITY = {
     EnumFanVolume.STEP_5: [FAN_LOW, '稍弱', FAN_MEDIUM, '稍强', FAN_HIGH],
     EnumFanVolume.STEPLESS: [FAN_LOW, '稍弱', FAN_MEDIUM, '稍强', FAN_HIGH],
 }
-SWING_LIST = ['➡️', '↘️', '⬇️', '↙️', '⬅️', '↔️', '🔄']
+_CLIMATE_SWING_OPTIONS = {
+    '➡️': EnumControl.FanDirection.P0,
+    '↘️': EnumControl.FanDirection.P1,
+    '⬇️': EnumControl.FanDirection.P2,
+    '↙️': EnumControl.FanDirection.P3,
+    '⬅️': EnumControl.FanDirection.P4,
+    '自动': EnumControl.FanDirection.AUTO,
+}
+_CLIMATE_SWING_NAMES = {v: k for k, v in _CLIMATE_SWING_OPTIONS.items()}
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_HOST): cv.string,
@@ -336,7 +344,9 @@ class DsAir(ClimateEntity):
         fan_direction = primary_direction(self._device_info)
         if fan_direction is None or fan_direction == EnumControl.FanDirection.INVALID:
             return None
-        return EnumControl.get_fan_direction_name(fan_direction.value)
+        if fan_direction == EnumControl.FanDirection.SWING:
+            return "自动"
+        return _CLIMATE_SWING_NAMES.get(fan_direction)
 
     @property
     def swing_modes(self) -> Optional[List[str]]:
@@ -344,7 +354,7 @@ class DsAir(ClimateEntity):
 
         Requires SUPPORT_SWING_MODE.
         """
-        return SWING_LIST
+        return list(_CLIMATE_SWING_OPTIONS.keys())
 
     def set_temperature(self, **kwargs):
         """Set new target temperatures."""
@@ -432,7 +442,7 @@ class DsAir(ClimateEntity):
         """Set new swing mode."""
         status = self._device_info.status
         if status.switch == EnumControl.Switch.ON:
-            fan_direction = EnumControl.get_fan_direction_enum(swing_mode)
+            fan_direction = _CLIMATE_SWING_OPTIONS[swing_mode]
             axis = AXIS_VERTICAL
             if not direction_supported(self._device_info, AXIS_VERTICAL):
                 axis = AXIS_HORIZONTAL

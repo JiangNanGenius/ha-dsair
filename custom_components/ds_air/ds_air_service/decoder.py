@@ -54,6 +54,10 @@ def result_factory(data):
             result = CmdTransferResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_QUERY_SCHEDULE_FINISH.value:
             result = QueryScheduleFinish(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_QUERY.value:
+            result = AirConCleaningQueryResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_SETTING.value:
+            result = AirConCleaningControlResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_SCHEDULE_QUERY_VERSION_V3:
             result = ScheduleQueryVersionV3Result(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SENSOR2_INFO:
@@ -129,6 +133,10 @@ class Decode:
         pos += l
         self._pos = pos
         return s
+
+    @property
+    def remaining(self):
+        return len(self._b) - self._pos
 
 
 class BaseResult(BaseBean):
@@ -565,6 +573,75 @@ class CmdTransferResult(BaseResult):
 
     def load_bytes(self, b):
         """todo"""
+
+
+class AirConCleaningQueryResult(BaseResult):
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_QUERY)
+        self._items = []
+
+    def load_bytes(self, b):
+        d = Decode(b)
+        if d.remaining < 1:
+            return
+
+        count = d.read1()
+        if count == 255:
+            return
+
+        for _ in range(count):
+            if d.remaining < 3:
+                break
+
+            item = {"room": d.read1()}
+            d.read1()
+            item["unit"] = d.read1()
+
+            while d.remaining > 0:
+                key = d.read1()
+                if key == 0:
+                    break
+                if d.remaining < 1:
+                    break
+                length = d.read1()
+                if length > d.remaining:
+                    raw = d.read(d.remaining)
+                else:
+                    raw = d.read(length)
+                value = int.from_bytes(raw, "little", signed=False)
+
+                if key == 4:
+                    item["heat_exchange_cleaning_allow"] = value == 1
+                elif key == 5:
+                    item["heat_exchange_cleaning_status"] = value
+                elif key == 7:
+                    item["heat_exchange_cleaning_phase_duration"] = value
+                elif key == 8:
+                    item["heat_exchange_cleaning_percent"] = value
+
+            self._items.append(item)
+
+    def do(self):
+        from .service import Service
+        Service.set_cleaning_info(self._items)
+
+    @property
+    def items(self):
+        return self._items
+
+
+class AirConCleaningControlResult(BaseResult):
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_SETTING)
+        self.success = None
+        self.code = None
+
+    def load_bytes(self, b):
+        if len(b) < 2:
+            return
+        d = Decode(b)
+        self.success = d.read1() == 0
+        self.code = d.read1()
 
 
 class QueryScheduleFinish(BaseResult):
