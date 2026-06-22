@@ -603,6 +603,10 @@ class AirConStatusChangedResult(BaseResult):
                 direction = d.read1()
                 status.fan_direction1 = EnumControl.FanDirection(direction & 0xF)
                 status.fan_direction2 = EnumControl.FanDirection((direction >> 4) & 0xF)
+            if flag & EnumControl.Type.HUMIDITY:
+                status.humidity = EnumControl.Humidity(d.read1())
+            if flag & EnumControl.Type.BREATHE:
+                status.breathe = EnumControl.Breathe(d.read1())
 
     def do(self):
         from .service import Service

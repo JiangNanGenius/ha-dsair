@@ -238,7 +238,11 @@ class AirConControlParam(AirconParam):
             if self.target == EnumDevice.NEWAIRCON:
                 if status.humidity is not None:
                     flag = flag | EnumControl.Type.HUMIDITY
-                    li.append((1, status.humidity))
+                    li.append((1, status.humidity.value))
+            if self.target == EnumDevice.BATHROOM:
+                if status.breathe is not None:
+                    flag = flag | EnumControl.Type.BREATHE
+                    li.append((1, status.breathe.value))
         s.write1(flag)
         for bit, val in li:
             if bit == 1:

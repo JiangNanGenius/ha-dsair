@@ -297,11 +297,16 @@ class Service:
 
     @staticmethod
     def poll_status():
-        for i in Service._new_aircons:
-            p = AirConQueryStatusParam()
-            p.target = EnumDevice.NEWAIRCON
-            p.device = i
-            Service.send_msg(p)
+        for target, aircons in (
+            (EnumDevice.NEWAIRCON, Service._new_aircons),
+            (EnumDevice.AIRCON, Service._aircons),
+            (EnumDevice.BATHROOM, Service._bathrooms),
+        ):
+            for i in aircons or []:
+                p = AirConQueryStatusParam()
+                p.target = target
+                p.device = i
+                Service.send_msg(p)
         p = Sensor2InfoParam()
         Service.send_msg(p)
 
