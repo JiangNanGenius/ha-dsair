@@ -85,7 +85,7 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
     
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        self._config_entry = config_entry
         self._config_data = []
         hass: HomeAssistant = GetHass.get_hash()
         self._climates = list(map(lambda state: state.alias, Service.get_aircons()))
@@ -123,36 +123,37 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
             self.user_input.update(user_input)
             if self.user_input.get('_invaild'):
                 self.user_input['_invaild'] = False
-                self.hass.config_entries.async_update_entry(self.config_entry, data=self.user_input)
+                self.hass.config_entries.async_update_entry(self._config_entry, data=self.user_input)
                 return self.async_create_entry(title='', data={})
         else:
+            config_data = self._config_entry.data
             self.user_input['_invaild'] = True
-            if CONF_SENSORS:
+            if config_data.get(CONF_SENSORS, True):
                 return self.async_show_form(
                     step_id="adjust_config",
                     data_schema=vol.Schema({
-                        vol.Required(CONF_HOST, default=self.config_entry.data[CONF_HOST]): str,
-                        vol.Required(CONF_PORT, default=self.config_entry.data[CONF_PORT]): int,
-                        vol.Required(CONF_GW, default=self.config_entry.data[CONF_GW]): vol.In(GW_LIST),
-                        vol.Required(CONF_SCAN_INTERVAL, default=self.config_entry.data[CONF_SCAN_INTERVAL]): int,
+                        vol.Required(CONF_HOST, default=config_data[CONF_HOST]): str,
+                        vol.Required(CONF_PORT, default=config_data[CONF_PORT]): int,
+                        vol.Required(CONF_GW, default=config_data[CONF_GW]): vol.In(GW_LIST),
+                        vol.Required(CONF_SCAN_INTERVAL, default=config_data[CONF_SCAN_INTERVAL]): int,
                         vol.Required(CONF_SENSORS, default=True): bool,
-                        vol.Required("temp", default=self.config_entry.data["temp"]): bool,
-                        vol.Required("humidity", default=self.config_entry.data["humidity"]): bool,
-                        vol.Required("pm25", default=self.config_entry.data["pm25"]): bool,
-                        vol.Required("co2", default=self.config_entry.data["co2"]): bool,
-                        vol.Required("tvoc", default=self.config_entry.data["tvoc"]): bool,
-                        vol.Required("voc", default=self.config_entry.data["voc"]): bool,
-                        vol.Required("hcho", default=self.config_entry.data["hcho"]): bool,
+                        vol.Required("temp", default=config_data.get("temp", True)): bool,
+                        vol.Required("humidity", default=config_data.get("humidity", True)): bool,
+                        vol.Required("pm25", default=config_data.get("pm25", True)): bool,
+                        vol.Required("co2", default=config_data.get("co2", True)): bool,
+                        vol.Required("tvoc", default=config_data.get("tvoc", True)): bool,
+                        vol.Required("voc", default=config_data.get("voc", False)): bool,
+                        vol.Required("hcho", default=config_data.get("hcho", False)): bool,
                     }), errors=errors
                 )
             else:
                 return self.async_show_form(
                     step_id="adjust_config",
                     data_schema=vol.Schema({
-                        vol.Required(CONF_HOST, default=self.config_entry.data[CONF_HOST]): str,
-                        vol.Required(CONF_PORT, default=self.config_entry.data[CONF_PORT]): int,
-                        vol.Required(CONF_GW, default=self.config_entry.data[CONF_GW]): vol.In(GW_LIST),
-                        vol.Required(CONF_SCAN_INTERVAL, default=self.config_entry.data[CONF_SCAN_INTERVAL]): int,
+                        vol.Required(CONF_HOST, default=config_data[CONF_HOST]): str,
+                        vol.Required(CONF_PORT, default=config_data[CONF_PORT]): int,
+                        vol.Required(CONF_GW, default=config_data[CONF_GW]): vol.In(GW_LIST),
+                        vol.Required(CONF_SCAN_INTERVAL, default=config_data[CONF_SCAN_INTERVAL]): int,
                         vol.Required(CONF_SENSORS, default=False): bool
                     }), errors=errors
                 )

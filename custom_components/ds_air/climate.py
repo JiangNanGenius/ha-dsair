@@ -412,10 +412,11 @@ class DsAir(ClimateEntity):
         status = self._device_info.status
         new_status = AirConStatus()
         if status.switch == EnumControl.Switch.ON:
-            status.fan_direction1 = self._device_info.status.fan_direction1
-            new_status.fan_direction1 = self._device_info.status.fan_direction1
-            status.fan_direction2 = EnumControl.get_fan_direction_enum(swing_mode)
-            new_status.fan_direction2 = EnumControl.get_fan_direction_enum(swing_mode)
+            fan_direction = EnumControl.get_fan_direction_enum(swing_mode)
+            status.fan_direction1 = fan_direction
+            new_status.fan_direction1 = fan_direction
+            status.fan_direction2 = self._device_info.status.fan_direction2
+            new_status.fan_direction2 = self._device_info.status.fan_direction2
             from .ds_air_service.service import Service
             Service.control(self._device_info, new_status)
         self.schedule_update_ha_state()
