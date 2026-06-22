@@ -45,7 +45,7 @@ from .fan_direction import (
     AXIS_VERTICAL,
     direction_supported,
     primary_direction,
-    status_for_single_swing,
+    status_for_axis_direction,
 )
 
 _SUPPORT_FLAGS = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE
@@ -433,10 +433,15 @@ class DsAir(ClimateEntity):
         status = self._device_info.status
         if status.switch == EnumControl.Switch.ON:
             fan_direction = EnumControl.get_fan_direction_enum(swing_mode)
-            new_status = status_for_single_swing(self._device_info, fan_direction)
+            axis = AXIS_VERTICAL
+            if not direction_supported(self._device_info, AXIS_VERTICAL):
+                axis = AXIS_HORIZONTAL
+            new_status = status_for_axis_direction(self._device_info, axis, fan_direction)
             if new_status is not None:
-                status.fan_direction1 = new_status.fan_direction1
-                status.fan_direction2 = new_status.fan_direction2
+                if new_status.fan_direction1 is not None:
+                    status.fan_direction1 = new_status.fan_direction1
+                if new_status.fan_direction2 is not None:
+                    status.fan_direction2 = new_status.fan_direction2
                 from .ds_air_service.service import Service
                 Service.control(self._device_info, new_status)
         self.schedule_update_ha_state()

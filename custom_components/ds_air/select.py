@@ -26,19 +26,6 @@ _AXIS_NAMES = {
     AXIS_HORIZONTAL: "水平风向",
 }
 
-_MODE_OPTIONS = {
-    "制冷": EnumControl.Mode.COLD,
-    "除湿": EnumControl.Mode.DRY,
-    "送风": EnumControl.Mode.VENTILATION,
-    "自动": EnumControl.Mode.AUTO,
-    "制热": EnumControl.Mode.HEAT,
-    "自动除湿": EnumControl.Mode.AUTODRY,
-    "舒适": EnumControl.Mode.RELAX,
-    "睡眠": EnumControl.Mode.SLEEP,
-    "预热": EnumControl.Mode.PREHEAT,
-    "强力除湿": EnumControl.Mode.MOREDRY,
-}
-
 _BREATHE_OPTIONS = {
     "关闭": EnumControl.Breathe.CLOSE,
     "弱": EnumControl.Breathe.WEAK,
@@ -66,8 +53,6 @@ async def async_setup_entry(
 
     selects = []
     for aircon in Service.get_aircons():
-        if mode_options(aircon):
-            selects.append(DsAirModeSelect(aircon))
         for axis in (AXIS_VERTICAL, AXIS_HORIZONTAL):
             if direction_supported(aircon, axis):
                 selects.append(DsAirDirectionSelect(aircon, axis))
@@ -109,39 +94,6 @@ class DsAirSelectBase(SelectEntity):
             "name": "空调%s" % self._device_info.alias,
             "manufacturer": "Daikin Industries, Ltd.",
         }
-
-
-class DsAirModeSelect(DsAirSelectBase):
-    """Exact Daikin operation mode select."""
-
-    def __init__(self, aircon: AirCon):
-        super().__init__(aircon)
-        self._attr_unique_id = f"{aircon.unique_id}_daikin_mode"
-        self._attr_name = "大金运行模式"
-        self._attr_options = mode_options(aircon)
-
-    @property
-    def available(self):
-        """Return whether exact mode selection is available."""
-        return bool(mode_options(self._device_info))
-
-    @property
-    def current_option(self) -> Optional[str]:
-        """Return the current Daikin mode."""
-        return mode_to_option(self._device_info.status.mode)
-
-    def select_option(self, option: str) -> None:
-        """Set exact Daikin operation mode."""
-        mode = _MODE_OPTIONS[option]
-        status = self._device_info.status
-        new_status = AirConStatus(switch=EnumControl.Switch.ON, mode=mode)
-        status.switch = EnumControl.Switch.ON
-        status.mode = mode
-
-        from .ds_air_service.service import Service
-
-        Service.control(self._device_info, new_status)
-        self.schedule_update_ha_state()
 
 
 class DsAirDirectionSelect(DsAirSelectBase):
@@ -230,38 +182,6 @@ class DsAirBreatheSelect(DsAirSelectBase):
 
         Service.control(self._device_info, new_status)
         self.schedule_update_ha_state()
-
-
-def mode_options(aircon: AirCon) -> list[str]:
-    options = []
-    if aircon.cool_mode:
-        options.append("制冷")
-    if aircon.dry_mode:
-        options.append("除湿")
-    if aircon.ventilation_mode:
-        options.append("送风")
-    if aircon.auto_mode:
-        options.append("自动")
-    if aircon.heat_mode:
-        options.append("制热")
-    if aircon.auto_dry_mode:
-        options.append("自动除湿")
-    if aircon.relax_mode:
-        options.append("舒适")
-    if aircon.sleep_mode:
-        options.append("睡眠")
-    if aircon.pre_heat_mode:
-        options.append("预热")
-    if aircon.more_dry_mode:
-        options.append("强力除湿")
-    return options
-
-
-def mode_to_option(mode: Optional[EnumControl.Mode]) -> Optional[str]:
-    for option, enum_mode in _MODE_OPTIONS.items():
-        if enum_mode == mode:
-            return option
-    return None
 
 
 def breathe_supported(aircon: AirCon) -> bool:
