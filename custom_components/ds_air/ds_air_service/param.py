@@ -178,7 +178,7 @@ class AirConQueryStatusParam(AirconParam):
             if dev.fan_volume != EnumFanVolume.NO:
                 flag = flag | t.AIR_FLOW
             if Config.is_new_version:
-                if dev.fan_direction1 != EnumFanDirection.FIX and dev.fan_direction2 != EnumFanDirection.FIX:
+                if dev.fan_direction1 != EnumFanDirection.FIX or dev.fan_direction2 != EnumFanDirection.FIX:
                     flag = flag | t.FAN_DIRECTION
                 if dev.bath_room:
                     flag = flag | t.BREATHE
@@ -228,15 +228,17 @@ class AirConControlParam(AirconParam):
             flag = flag | EnumControl.Type.SETTED_TEMP
             li.append((2, status.setted_temp))
         if Config.is_new_version:
-            if self.target != EnumDevice.BATHROOM:
-                if status.fan_direction1 is not None:
-                    flag = flag | EnumControl.Type.FAN_DIRECTION
-                    li.append((1, status.fan_direction1 | status.fan_direction2 << 4))
+            if status.fan_direction1 is not None:
+                flag = flag | EnumControl.Type.FAN_DIRECTION
+                fan_direction2 = status.fan_direction2
+                if fan_direction2 is None:
+                    fan_direction2 = aircon.status.fan_direction2
+                li.append((1, status.fan_direction1 | fan_direction2 << 4))
 
-                if self.target == EnumDevice.NEWAIRCON:
-                    if status.humidity is not None:
-                        flag = flag | EnumControl.Type.HUMIDITY
-                        li.append((1, status.humidity))
+            if self.target == EnumDevice.NEWAIRCON:
+                if status.humidity is not None:
+                    flag = flag | EnumControl.Type.HUMIDITY
+                    li.append((1, status.humidity))
         s.write1(flag)
         for bit, val in li:
             if bit == 1:

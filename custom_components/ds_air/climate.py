@@ -37,7 +37,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import DOMAIN
 from .ds_air_service.config import Config
-from .ds_air_service.ctrl_enum import EnumControl
+from .ds_air_service.ctrl_enum import EnumControl, EnumFanDirection
 from .ds_air_service.dao import AirCon, AirConStatus
 from .ds_air_service.display import display
 
@@ -316,7 +316,10 @@ class DsAir(ClimateEntity):
     @property
     def swing_mode(self):
         """Return the swing setting."""
-        return EnumControl.get_fan_direction_name(self._device_info.status.fan_direction1.value)
+        fan_direction = self._device_info.status.fan_direction1
+        if fan_direction is None or fan_direction == EnumControl.FanDirection.INVALID:
+            return None
+        return EnumControl.get_fan_direction_name(fan_direction.value)
 
     @property
     def swing_modes(self) -> Optional[List[str]]:
@@ -413,10 +416,12 @@ class DsAir(ClimateEntity):
         new_status = AirConStatus()
         if status.switch == EnumControl.Switch.ON:
             fan_direction = EnumControl.get_fan_direction_enum(swing_mode)
+            horizontal_direction = status.fan_direction2
             status.fan_direction1 = fan_direction
             new_status.fan_direction1 = fan_direction
-            status.fan_direction2 = self._device_info.status.fan_direction2
-            new_status.fan_direction2 = self._device_info.status.fan_direction2
+            # direction1 is vertical and direction2 is horizontal; the protocol
+            # packs both axes into one byte, so preserve the horizontal axis.
+            new_status.fan_direction2 = horizontal_direction
             from .ds_air_service.service import Service
             Service.control(self._device_info, new_status)
         self.schedule_update_ha_state()
@@ -456,7 +461,7 @@ class DsAir(ClimateEntity):
         """Return the list of supported features."""
         SUPPORT_FLAGS = _SUPPORT_FLAGS
         aircon = self._device_info
-        if self._device_info.status.fan_direction1.value > 0:
+        if aircon.fan_direction1 != EnumFanDirection.FIX:
             SUPPORT_FLAGS = SUPPORT_FLAGS | ClimateEntityFeature.SWING_MODE
         if aircon.relax_mode:
             SUPPORT_FLAGS = SUPPORT_FLAGS | ClimateEntityFeature.TARGET_HUMIDITY
