@@ -28,7 +28,7 @@ from homeassistant.components.climate import (
     FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import TEMP_CELSIUS, ATTR_TEMPERATURE, CONF_HOST, CONF_PORT
+from homeassistant.const import UnitOfTemperature, ATTR_TEMPERATURE, CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, Event
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import DeviceInfo
@@ -184,7 +184,7 @@ class DsAir(ClimateEntity):
     @property
     def temperature_unit(self):
         """Return the unit of measurement."""
-        return TEMP_CELSIUS
+        return UnitOfTemperature.CELSIUS
 
     @property
     def target_humidity(self):
