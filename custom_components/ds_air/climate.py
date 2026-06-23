@@ -48,7 +48,13 @@ from .fan_direction import (
     status_for_axis_direction,
 )
 
-_SUPPORT_FLAGS = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE
+_SUPPORT_FLAGS = (
+    ClimateEntityFeature.TARGET_TEMPERATURE
+    | ClimateEntityFeature.FAN_MODE
+    | ClimateEntityFeature.PRESET_MODE
+    | ClimateEntityFeature.TURN_ON
+    | ClimateEntityFeature.TURN_OFF
+)
 #                | ClimateEntityFeature.SWING_MODE | ClimateEntityFeature.TARGET_HUMIDITY
 FAN_LIST = [ FAN_LOW, '稍弱', FAN_MEDIUM, '稍强', FAN_HIGH, FAN_AUTO]
 _FAN_BY_CAPABILITY = {
