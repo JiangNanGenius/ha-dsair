@@ -90,6 +90,27 @@ class Ventilation(Device):
     def __init__(self):
         Device.__init__(self)
         self.is_small_vam = False  # type: bool
+        self.capability = 0  # type: int
+        self.status = VentilationStatus()  # type: VentilationStatus
+
+
+def get_device_by_vent(vent: Ventilation):
+    if vent.is_small_vam:
+        return EnumDevice.SMALL_VAM
+    return EnumDevice.VENTILATION
+
+
+class VentilationStatus:
+    def __init__(self, switch=None, mode=None, air_flow=None,
+                 in_door_temp=None, out_door_temp=None,
+                 out_door_humidity=None, pm25=None):
+        self.switch = switch  # type: Optional[EnumControl.Switch]
+        self.mode = mode  # type: Optional[EnumControl.Mode]
+        self.air_flow = air_flow  # type: Optional[EnumControl.AirFlow]
+        self.in_door_temp = in_door_temp  # type: Optional[int]
+        self.out_door_temp = out_door_temp  # type: Optional[int]
+        self.out_door_humidity = out_door_humidity  # type: Optional[int]
+        self.pm25 = pm25  # type: Optional[int]
 
 
 class HD(Device):
@@ -152,4 +173,4 @@ class Room:
         self.id = 0  # type: int
         self.name = ''  # type: str
         self.type = 0  # type: int
-        self.ventilation = Ventilation()  # type: Optional[Ventilation]
+        self.ventilation = None  # type: Optional[Ventilation]

@@ -6,9 +6,10 @@ from .config import Config
 from .ctrl_enum import EnumDevice, EnumCmdType, EnumFanDirection, EnumOutDoorRunCond, EnumFanVolume, EnumControl, \
     EnumSensor, FreshAirHumidification, ThreeDFresh
 from .dao import Room, AirCon, Geothermic, Ventilation, HD, Device, AirConStatus, get_device_by_aircon, Sensor, \
-    UNINITIALIZED_VALUE
+    UNINITIALIZED_VALUE, VentilationStatus, get_device_by_vent
 from .param import GetRoomInfoParam, AirConRecommendedIndoorTempParam, AirConCapabilityQueryParam, \
-    AirConQueryStatusParam, Sensor2InfoParam
+    AirConQueryStatusParam, Sensor2InfoParam, VentilationCapabilityQueryParam, VentilationQueryStatusParam, \
+    VentilationQueryCompositeSituationParam
 
 
 def decoder(b):
@@ -79,6 +80,18 @@ def result_factory(data):
             result = AirConQueryScenarioSettingResult(cnt, device)
         elif cmd_type == EnumCmdType.SENSOR2_INFO.value:
             result = Sensor2InfoResult(cnt, device)
+        else:
+            result = UnknownResult(cnt, device, cmd_type)
+    elif dev_id == EnumDevice.VENTILATION.value[1] or dev_id == EnumDevice.SMALL_VAM.value[1]:
+        device = EnumDevice((8, dev_id))
+        if cmd_type == EnumCmdType.STATUS_CHANGED.value:
+            result = VentilationStatusChangedResult(cnt, device)
+        elif cmd_type == EnumCmdType.QUERY_STATUS.value:
+            result = VentilationQueryStatusResult(cnt, device)
+        elif cmd_type == EnumCmdType.VENT_QUERY_CAPABILITY.value:
+            result = VentilationCapabilityQueryResult(cnt, device)
+        elif cmd_type == EnumCmdType.SMALL_VAM_QUERY_COMPOSITE_SITUATION.value:
+            result = VentilationQueryCompositeSituationResult(cnt, device)
         else:
             result = UnknownResult(cnt, device, cmd_type)
     else:
@@ -482,6 +495,8 @@ class GetRoomInfoResult(BaseResult):
         aircons = []
         new_aircons = []
         bathrooms = []
+        vents = []
+        small_vams = []
         for room in Service.get_rooms():
             if room.air_con is not None:
                 room.air_con.alias = room.alias
@@ -491,6 +506,12 @@ class GetRoomInfoResult(BaseResult):
                     bathrooms.append(room.air_con)
                 else:
                     aircons.append(room.air_con)
+            if room.ventilation is not None:
+                room.ventilation.alias = room.alias
+                if room.ventilation.is_small_vam:
+                    small_vams.append(room.ventilation)
+                else:
+                    vents.append(room.ventilation)
 
         p = AirConCapabilityQueryParam()
         p.aircons = aircons
@@ -504,6 +525,28 @@ class GetRoomInfoResult(BaseResult):
         p.aircons = bathrooms
         p.target = EnumDevice.BATHROOM
         Service.send_msg(p)
+        Service.set_device(EnumDevice.VENTILATION, vents)
+        Service.set_device(EnumDevice.SMALL_VAM, small_vams)
+        if vents:
+            p = VentilationCapabilityQueryParam()
+            p.vents = vents
+            p.target = EnumDevice.VENTILATION
+            Service.send_msg(p)
+        if small_vams:
+            p = VentilationCapabilityQueryParam()
+            p.vents = small_vams
+            p.target = EnumDevice.SMALL_VAM
+            Service.send_msg(p)
+        for vent in vents + small_vams:
+            p = VentilationQueryStatusParam()
+            p.target = get_device_by_vent(vent)
+            p.device = vent
+            Service.send_msg(p)
+            if vent.is_small_vam:
+                p = VentilationQueryCompositeSituationParam()
+                p.target = EnumDevice.SMALL_VAM
+                p.device = vent
+                Service.send_msg(p)
 
     @property
     def count(self):
@@ -865,6 +908,125 @@ class AirConQueryScenarioSettingResult(BaseResult):
 
     def load_bytes(self, b):
         """todo"""
+
+
+class VentilationStatusChangedResult(BaseResult):
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.STATUS_CHANGED)
+        self._room = 0
+        self._unit = 0
+        self._status = VentilationStatus()
+
+    def load_bytes(self, b):
+        d = Decode(b)
+        self._room = d.read1()
+        self._unit = d.read1()
+        status = self._status
+        flag = d.read1()
+        if flag & EnumControl.Type.SWITCH:
+            status.switch = EnumControl.Switch(d.read1())
+        if flag & EnumControl.Type.MODE:
+            status.mode = EnumControl.Mode(d.read1())
+        if flag & EnumControl.Type.AIR_FLOW:
+            status.air_flow = EnumControl.AirFlow(d.read1())
+
+    def do(self):
+        from .service import Service
+        Service.update_ventilation(self.target, self._room, self._unit, status=self._status)
+
+
+class VentilationCapabilityQueryResult(BaseResult):
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.VENT_QUERY_CAPABILITY)
+        self._vents = []
+
+    def load_bytes(self, b):
+        d = Decode(b)
+        room_size = d.read1()
+        for _i in range(room_size):
+            room_id = d.read1()
+            unit_size = d.read1()
+            for _j in range(unit_size):
+                vent = Ventilation()
+                vent.room_id = room_id
+                vent.unit_id = d.read1()
+                vent.is_small_vam = self.target == EnumDevice.SMALL_VAM
+                vent.capability = d.read1()
+                self._vents.append(vent)
+
+    def do(self):
+        from .service import Service
+        if Service.is_ready():
+            for i in self._vents:
+                Service.update_ventilation(get_device_by_vent(i), i.room_id, i.unit_id, vent=i)
+
+
+class VentilationQueryStatusResult(BaseResult):
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.QUERY_STATUS)
+        self._room = 0
+        self._unit = 0
+        self._status = VentilationStatus()
+
+    def load_bytes(self, b):
+        d = Decode(b)
+        self._room = d.read1()
+        self._unit = d.read1()
+        status = self._status
+        flag = d.read1()
+        if flag & EnumControl.Type.SWITCH:
+            status.switch = EnumControl.Switch(d.read1())
+        if flag & EnumControl.Type.MODE:
+            status.mode = EnumControl.Mode(d.read1())
+        if flag & EnumControl.Type.AIR_FLOW:
+            status.air_flow = EnumControl.AirFlow(d.read1())
+
+    def do(self):
+        from .service import Service
+        Service.set_ventilation_status(self._room, self._unit, self._status)
+
+
+class VentilationQueryCompositeSituationResult(BaseResult):
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SMALL_VAM_QUERY_COMPOSITE_SITUATION)
+        self._room = 0
+        self._unit = 0
+        self._in_door_temp = UNINITIALIZED_VALUE
+        self._out_door_temp = UNINITIALIZED_VALUE
+        self._out_door_humidity = UNINITIALIZED_VALUE
+        self._pm25 = UNINITIALIZED_VALUE
+
+    def load_bytes(self, b):
+        d = Decode(b)
+        self._room = d.read1()
+        self._unit = d.read1()
+        while d.remaining >= 2:
+            status_type = d.read1()
+            status_size = d.read1()
+            if status_type == 0:
+                break
+            if status_size > d.remaining:
+                break
+            if status_type == 1 and status_size == 2:
+                self._in_door_temp = d.read2()
+            elif status_type == 2 and status_size == 2:
+                self._out_door_humidity = d.read2()
+            elif status_type == 3 and status_size == 2:
+                self._out_door_temp = d.read2()
+            elif status_type == 4 and status_size == 2:
+                self._pm25 = d.read2()
+            else:
+                d.read(status_size)
+
+    def do(self):
+        from .service import Service
+        status = VentilationStatus(
+            in_door_temp=self._in_door_temp,
+            out_door_temp=self._out_door_temp,
+            out_door_humidity=self._out_door_humidity,
+            pm25=self._pm25,
+        )
+        Service.set_ventilation_status(self._room, self._unit, status)
 
 
 class UnknownResult(BaseResult):

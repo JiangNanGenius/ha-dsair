@@ -151,6 +151,7 @@ class EnumCmdType(IntEnum):
     HCHO_GET_SENSORS = 152
     SYS_ADDRESS_ALLOCATION = 218
     SMALL_VAM_QUERY_AIR_QUALITY = 52
+    SMALL_VAM_QUERY_COMPOSITE_SITUATION = 52
     SMALL_VAM_LINKAGE_CONTROL = 53
     SMALL_VAM_LINKAGE_STATUS = 54
     HUMIDIFIER_GET_ALL_DEVICES = 4
@@ -356,6 +357,26 @@ class EnumControl:
     @staticmethod
     def get_fan_direction_enum(name):
         return FanDirection(_FAN_DIRECTION_LIST.index(name))
+
+
+_MODE_VENT_NAME_LIST_SMALL_VAM = ["内循环", "热交换", "自动", "防污染", "排异味"]
+_MODE_VENT_NAME_LIST_STANDARD_VAM = ["旁通", "热交换", "自动"]
+
+
+def get_vent_mode_name_small_vam(idx):
+    return _MODE_VENT_NAME_LIST_SMALL_VAM[idx] if idx is not None else None
+
+
+def get_vent_mode_enum_small_vam(name):
+    return Mode(_MODE_VENT_NAME_LIST_SMALL_VAM.index(name))
+
+
+def get_vent_mode_name_standard_vam(idx):
+    return _MODE_VENT_NAME_LIST_STANDARD_VAM[idx] if idx is not None else None
+
+
+def get_vent_mode_enum_standard_vam(name):
+    return Mode(_MODE_VENT_NAME_LIST_STANDARD_VAM.index(name))
 
 
 class EnumSensor:
