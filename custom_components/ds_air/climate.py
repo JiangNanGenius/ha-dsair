@@ -394,16 +394,41 @@ class DsAir(ClimateEntity):
             Service.control(self._device_info, new_status)
         self.schedule_update_ha_state()
 
+    def _set_switch(self, switch: EnumControl.Switch) -> None:
+        """Set only the power state without changing the current mode."""
+        status = self._device_info.status
+        new_status = AirConStatus()
+        status.switch = switch
+        new_status.switch = switch
+        from .ds_air_service.service import Service
+        Service.control(self._device_info, new_status)
+        self.schedule_update_ha_state()
+
+    def turn_on(self) -> None:
+        """Turn the device on using the existing mode."""
+        self._set_switch(EnumControl.Switch.ON)
+
+    def turn_off(self) -> None:
+        """Turn the device off using the native power command."""
+        self._set_switch(EnumControl.Switch.OFF)
+
+    async def async_turn_on(self) -> None:
+        """Turn the device on from async HA service calls."""
+        await self.hass.async_add_executor_job(self.turn_on)
+
+    async def async_turn_off(self) -> None:
+        """Turn the device off from async HA service calls."""
+        await self.hass.async_add_executor_job(self.turn_off)
+
     def set_hvac_mode(self, hvac_mode: str) -> None:
         """Set new target hvac mode."""
         aircon = self._device_info
         status = aircon.status
         new_status = AirConStatus()
-        if hvac_mode == HVACMode.OFF:
-            status.switch = EnumControl.Switch.OFF
-            new_status.switch = EnumControl.Switch.OFF
-            from .ds_air_service.service import Service
-            Service.control(self._device_info, new_status)
+        hvac_mode_value = getattr(hvac_mode, "value", hvac_mode)
+        if hvac_mode == HVACMode.OFF or str(hvac_mode_value).lower() == "off":
+            self.turn_off()
+            return
         else:
             status.switch = EnumControl.Switch.ON
             new_status.switch = EnumControl.Switch.ON
