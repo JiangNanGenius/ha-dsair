@@ -56,6 +56,7 @@ class AirCon(Device):
         self.fan_direction2 = EnumFanDirection.FIX  # type: EnumFanDirection
         self.fan_volume = EnumFanVolume.FIX  # type: EnumFanVolume
         self.fan_volume_auto = False  # type: bool
+        self.fan_volume_mute = False  # type: bool
         self.temp_set = False  # type: bool
         self.hum_fresh_air_allow = False  # type: bool
         self.three_d_fresh_allow = False  # type: bool
@@ -67,9 +68,35 @@ class AirCon(Device):
         self.sleep_mode = 0  # type: int
         self.ventilation_mode = 0  # type: int
         self.heat_exchange_cleaning_allow = False  # type: bool
-        self.heat_exchange_cleaning_status = None  # type: Optional[int]
-        self.heat_exchange_cleaning_percent = None  # type: Optional[int]
+        self.heat_exchange_cleaning_capability = None  # type: Optional[int]
+        self.heat_exchange_cleaning_can_join = None  # type: Optional[int]
+        self.heat_exchange_cleaning_work_state = None  # type: Optional[int]
         self.heat_exchange_cleaning_phase_duration = None  # type: Optional[int]
+        self.heat_exchange_cleaning_v_sleep_value_1 = None  # type: Optional[int]
+        self.heat_exchange_cleaning_v_sleep_value_2 = None  # type: Optional[int]
+        self.heat_exchange_cleaning_finish = None  # type: Optional[int]
+        self.heat_exchange_cleaning_outdoor_status = None  # type: Optional[int]
+        self.heat_exchange_cleaning_raw_tlvs = []  # type: list
+        self.heat_exchange_cleaning_parse_status = None  # type: Optional[str]
+        self.heat_exchange_cleaning_source_timestamp = None  # type: Optional[float]
+        # Official App cmd243 is room-scoped and separate from QUERY_STATUS.
+        self.inlet_temperature_c = None  # type: Optional[float]
+        self.inlet_humidity_percent = None  # type: Optional[float]
+        self.inlet_source_timestamp = None  # type: Optional[float]
+        self.inlet_source_monotonic = None  # type: Optional[float]
+        self.inlet_temperature_quality = "missing"  # type: str
+        self.inlet_humidity_quality = "missing"  # type: str
+        self.inlet_parse_status = None  # type: Optional[str]
+        self.inlet_raw_tlvs = []  # type: list
+        # System cmd6 and cmd9 are asynchronous, room-scoped local gateway
+        # diagnostics.  Keep their source timestamps so HA never has to infer a
+        # fault or filter warning from ordinary operating status.
+        self.failure_code_raw = None  # type: Optional[str]
+        self.failure_code_normalized = None  # type: Optional[str]
+        self.failure_level = None  # type: Optional[int]
+        self.failure_source_timestamp = None  # type: Optional[float]
+        self.filter_clean_sign_status = None  # type: Optional[int]
+        self.filter_clean_sign_source_timestamp = None  # type: Optional[float]
         self.status = AirConStatus()  # type: AirConStatus
 
 
@@ -92,6 +119,19 @@ class Ventilation(Device):
         self.is_small_vam = False  # type: bool
         self.capability = 0  # type: int
         self.status = VentilationStatus()  # type: VentilationStatus
+        self.vam_cleaning_tlv_16 = None  # type: Optional[int]
+        self.vam_cleaning_tlv_17 = None  # type: Optional[int]
+        self.vam_cleaning_tlv_18 = None  # type: Optional[int]
+        self.vam_cleaning_tlv_19 = None  # type: Optional[int]
+        self.vam_cleaning_tlv_20 = None  # type: Optional[int]
+        self.vam_cleaning_semantic_status = None  # type: Optional[str]
+        self.vam_cleaning_raw_tlvs = []  # type: list
+        self.vam_cleaning_parse_status = None  # type: Optional[str]
+        self.vam_cleaning_source_timestamp = None  # type: Optional[float]
+        # Official local system cmd10 is VAM-only.  Its room-scoped record
+        # carries the used percentage, not an indoor-unit filter hour count.
+        self.filter_used_percent = None  # type: Optional[int]
+        self.filter_service_life_source_timestamp = None  # type: Optional[float]
 
 
 def get_device_by_vent(vent: Ventilation):
@@ -111,6 +151,36 @@ class VentilationStatus:
         self.out_door_temp = out_door_temp  # type: Optional[int]
         self.out_door_humidity = out_door_humidity  # type: Optional[int]
         self.pm25 = pm25  # type: Optional[int]
+
+
+class GatewayDiagnostics:
+    """Non-sensitive gateway diagnostics populated only by real responses."""
+
+    def __init__(self):
+        self.gateway_version = None  # type: Optional[str]
+        self.wifi_version = None  # type: Optional[str]
+        self.gateway_time = None  # type: Optional[str]
+        self.gateway_info_source_timestamp = None  # type: Optional[float]
+        self.wifi_signal_strength = None  # type: Optional[int]
+        self.wifi_ping_success_count = None  # type: Optional[int]
+        self.wifi_network_delay = None  # type: Optional[int]
+        self.gateway_signal_raw = None  # type: Optional[str]
+        self.gateway_signal_source_timestamp = None  # type: Optional[float]
+        self.last_error_code_raw = None  # type: Optional[str]
+        self.last_error_code_normalized = None  # type: Optional[str]
+        self.last_error_device_id = None  # type: Optional[int]
+        self.last_error_device = None  # type: Optional[str]
+        self.last_error_room = None  # type: Optional[int]
+        # Kept for entity attribute compatibility; cmd6 does not carry a unit
+        # address in this position.  The byte is the official failure level.
+        self.last_error_unit = None  # type: Optional[int]
+        self.last_error_level = None  # type: Optional[int]
+        self.last_error_source_timestamp = None  # type: Optional[float]
+        self.filter_service_life_supported = None  # type: Optional[bool]
+        self.filter_service_life_source_timestamp = None  # type: Optional[float]
+        self.daikin_care_exponent_supported = None  # type: Optional[bool]
+        self.daikin_care_exponent_source_timestamp = None  # type: Optional[float]
+        self.vam_cleaning_unmapped = {}  # type: dict
 
 
 class HD(Device):
@@ -174,3 +244,4 @@ class Room:
         self.name = ''  # type: str
         self.type = 0  # type: int
         self.ventilation = None  # type: Optional[Ventilation]
+        self.ventilations = []  # type: list[Ventilation]

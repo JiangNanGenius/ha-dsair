@@ -9,8 +9,27 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL, CONF_SENSORS
 from homeassistant.core import callback, HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 
-from .const import DOMAIN, CONF_GW, DEFAULT_GW, DEFAULT_PORT, GW_LIST, DEFAULT_HOST
+from .const import (
+    DOMAIN,
+    CONF_FORCE_HEAT_MODE,
+    CONF_GW,
+    CONF_LINKS,
+    CONF_ZHONGHONG_HOST,
+    CONF_ZHONGHONG_OUTER_ADDRESS,
+    CONF_ZHONGHONG_POLL_INTERVAL,
+    CONF_ZHONGHONG_PORT,
+    CONF_ZHONGHONG_TEMPERATURE_ENABLED,
+    DEFAULT_GW,
+    DEFAULT_PORT,
+    DEFAULT_ZHONGHONG_HOST,
+    DEFAULT_ZHONGHONG_OUTER_ADDRESS,
+    DEFAULT_ZHONGHONG_POLL_INTERVAL,
+    DEFAULT_ZHONGHONG_PORT,
+    GW_LIST,
+    DEFAULT_HOST,
+)
 from .ds_air_service.service import Service
 from .hass_inst import GetHass
 
@@ -88,7 +107,8 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
         self._config_entry = config_entry
         self._config_data = []
         hass: HomeAssistant = GetHass.get_hash()
-        self._climates = list(map(lambda state: state.alias, Service.get_aircons()))
+        self._aircons = list(Service.get_aircons())
+        self._climates = [state.alias for state in self._aircons]
         sensors = hass.states.async_all("sensor")
         self._sensors_temp = list(map(lambda state: state.entity_id,
                                  filter(lambda state: state.attributes.get("device_class") == "temperature", sensors)))
@@ -110,7 +130,10 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             menu_options=[
                 "adjust_config",
-                "bind_sensors"
+                "bind_return_temperatures",
+                "bind_sensors",
+                "capability_overrides",
+                "zhonghong_temperature_source",
             ],
         ) 
 
@@ -124,7 +147,9 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
             if self.user_input.get('_invaild'):
                 self.user_input['_invaild'] = False
                 self.hass.config_entries.async_update_entry(self._config_entry, data=self.user_input)
-                return self.async_create_entry(title='', data={})
+                return self.async_create_entry(
+                    title='', data=dict(self._config_entry.options)
+                )
         else:
             config_data = self._config_entry.data
             self.user_input['_invaild'] = True
@@ -172,7 +197,9 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
             })
         self._cur = self._cur + 1
         if self._cur > (self._len - 1):
-            return self.async_create_entry(title="", data={"link": self._config_data})
+            options = dict(self._config_entry.options)
+            options[CONF_LINKS] = self._config_data
+            return self.async_create_entry(title="", data=options)
         return self.async_show_form(
             step_id="bind_sensors",
             data_schema=vol.Schema(
@@ -185,6 +212,156 @@ class DsAirOptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Optional("sensor_humi"): vol.In(self._sensors_humi)
                 }
             )
+        )
+
+    async def async_step_bind_return_temperatures(
+            self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Bind each native Daikin entity to an HA temperature source.
+
+        A climate source is read from its ``current_temperature`` attribute;
+        ordinary sensor sources continue to use their entity state.
+        """
+        if self._len == 0:
+            return self.async_show_form(step_id="empty", last_step=False)
+        if user_input is not None:
+            aircon = self._aircons[self._cur]
+            source = user_input.get("temperature_source") or None
+            self._config_data.append({
+                "climate": aircon.alias,
+                "climate_unique_id": aircon.unique_id,
+                "sensor_temp": source,
+            })
+        self._cur += 1
+        if self._cur > (self._len - 1):
+            old_links = self._config_entry.options.get(CONF_LINKS, [])
+            old_by_unique_id = {
+                str(item.get("climate_unique_id")): item
+                for item in old_links
+                if item.get("climate_unique_id") is not None
+            }
+            old_by_name = {
+                item.get("climate"): item
+                for item in old_links
+                if item.get("climate")
+            }
+            merged = []
+            for item in self._config_data:
+                previous = old_by_unique_id.get(str(item["climate_unique_id"])) \
+                    or old_by_name.get(item["climate"]) or {}
+                if previous.get("sensor_humi"):
+                    item["sensor_humi"] = previous["sensor_humi"]
+                merged.append(item)
+            options = dict(self._config_entry.options)
+            options[CONF_LINKS] = merged
+            return self.async_create_entry(title="", data=options)
+
+        aircon = self._aircons[self._cur]
+        old_links = self._config_entry.options.get(CONF_LINKS, [])
+        current = next((
+            item.get("sensor_temp", "")
+            for item in old_links
+            if str(item.get("climate_unique_id")) == str(aircon.unique_id)
+            or item.get("climate") == aircon.alias
+        ), "") or ""
+        field = vol.Optional("temperature_source")
+        if current:
+            field = vol.Optional("temperature_source", default=current)
+        return self.async_show_form(
+            step_id="bind_return_temperatures",
+            data_schema=vol.Schema({
+                vol.Required("climate", default=aircon.alias): vol.In([aircon.alias]),
+                field: selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["sensor", "climate"])
+                ),
+            }),
+        )
+
+    async def async_step_capability_overrides(
+            self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure explicit, traceable capability overrides."""
+        if user_input is not None:
+            options = dict(self._config_entry.options)
+            options[CONF_FORCE_HEAT_MODE] = bool(
+                user_input.get(CONF_FORCE_HEAT_MODE, False)
+            )
+            return self.async_create_entry(title="", data=options)
+        return self.async_show_form(
+            step_id="capability_overrides",
+            data_schema=vol.Schema({
+                vol.Required(
+                    CONF_FORCE_HEAT_MODE,
+                    default=bool(
+                        self._config_entry.options.get(CONF_FORCE_HEAT_MODE, False)
+                    ),
+                ): bool,
+            }),
+        )
+
+    async def async_step_zhonghong_temperature_source(
+            self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure the temperature-only Zhonghong TCP observer."""
+        if user_input is not None:
+            options = dict(self._config_entry.options)
+            options.update({
+                CONF_ZHONGHONG_TEMPERATURE_ENABLED: bool(user_input.get(
+                    CONF_ZHONGHONG_TEMPERATURE_ENABLED, False
+                )),
+                CONF_ZHONGHONG_HOST: str(user_input.get(
+                    CONF_ZHONGHONG_HOST, DEFAULT_ZHONGHONG_HOST
+                )).strip(),
+                CONF_ZHONGHONG_PORT: int(user_input.get(
+                    CONF_ZHONGHONG_PORT, DEFAULT_ZHONGHONG_PORT
+                )),
+                CONF_ZHONGHONG_OUTER_ADDRESS: int(user_input.get(
+                    CONF_ZHONGHONG_OUTER_ADDRESS,
+                    DEFAULT_ZHONGHONG_OUTER_ADDRESS,
+                )),
+                CONF_ZHONGHONG_POLL_INTERVAL: int(user_input.get(
+                    CONF_ZHONGHONG_POLL_INTERVAL,
+                    DEFAULT_ZHONGHONG_POLL_INTERVAL,
+                )),
+            })
+            return self.async_create_entry(title="", data=options)
+        options = self._config_entry.options
+        return self.async_show_form(
+            step_id="zhonghong_temperature_source",
+            data_schema=vol.Schema({
+                vol.Required(
+                    CONF_ZHONGHONG_TEMPERATURE_ENABLED,
+                    default=bool(options.get(
+                        CONF_ZHONGHONG_TEMPERATURE_ENABLED, False
+                    )),
+                ): bool,
+                vol.Required(
+                    CONF_ZHONGHONG_HOST,
+                    default=options.get(
+                        CONF_ZHONGHONG_HOST, DEFAULT_ZHONGHONG_HOST
+                    ),
+                ): str,
+                vol.Required(
+                    CONF_ZHONGHONG_PORT,
+                    default=int(options.get(
+                        CONF_ZHONGHONG_PORT, DEFAULT_ZHONGHONG_PORT
+                    )),
+                ): vol.All(int, vol.Range(min=1, max=65535)),
+                vol.Required(
+                    CONF_ZHONGHONG_OUTER_ADDRESS,
+                    default=int(options.get(
+                        CONF_ZHONGHONG_OUTER_ADDRESS,
+                        DEFAULT_ZHONGHONG_OUTER_ADDRESS,
+                    )),
+                ): vol.All(int, vol.Range(min=0, max=255)),
+                vol.Required(
+                    CONF_ZHONGHONG_POLL_INTERVAL,
+                    default=int(options.get(
+                        CONF_ZHONGHONG_POLL_INTERVAL,
+                        DEFAULT_ZHONGHONG_POLL_INTERVAL,
+                    )),
+                ): vol.All(int, vol.Range(min=5, max=300)),
+            }),
         )
 
     async def async_step_empty(

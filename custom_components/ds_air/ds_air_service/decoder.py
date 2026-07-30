@@ -1,4 +1,5 @@
 import struct
+import time
 import typing
 
 from .base_bean import BaseBean
@@ -9,7 +10,7 @@ from .dao import Room, AirCon, Geothermic, Ventilation, HD, Device, AirConStatus
     UNINITIALIZED_VALUE, VentilationStatus, get_device_by_vent
 from .param import GetRoomInfoParam, AirConRecommendedIndoorTempParam, AirConCapabilityQueryParam, \
     AirConQueryStatusParam, Sensor2InfoParam, VentilationCapabilityQueryParam, VentilationQueryStatusParam, \
-    VentilationQueryCompositeSituationParam
+    AirConCleaningQueryParam, OfficialSystemCmd
 
 
 def decoder(b):
@@ -37,6 +38,10 @@ def result_factory(data):
             result = TimeSyncResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_ERR_CODE.value:
             result = ErrCodeResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.SYS_FILTER_CLEAN_SIGN.value:
+            result = FilterCleanSignResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.SYS_FILTER_SERVICE_LIFE.value:
+            result = FilterServiceLifeResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_GET_WEATHER.value:
             result = GetWeatherResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_LOGIN.value:
@@ -51,6 +56,8 @@ def result_factory(data):
             result = QueryScheduleIDResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_HAND_SHAKE.value:
             result = HandShakeResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.SYS_GET_GW_INFO.value:
+            result = GetGWInfoResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_CMD_TRANSFER.value:
             result = CmdTransferResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_QUERY_SCHEDULE_FINISH.value:
@@ -59,6 +66,12 @@ def result_factory(data):
             result = AirConCleaningQueryResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_SETTING.value:
             result = AirConCleaningControlResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.SYS_DAIKIN_CARE_EXPONENT.value:
+            result = DaikinCareExponentFeatureResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == EnumCmdType.SYS_GATEWAY_SIGNAL_CHECK.value:
+            result = GatewaySignalResult(cnt, EnumDevice.SYSTEM)
+        elif cmd_type == OfficialSystemCmd.AIR_CON_INLET_TEMP_AND_HUMIDITY_INFO_QUERY.value:
+            result = AirConInletTempAndHumidityQueryResult(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SYS_SCHEDULE_QUERY_VERSION_V3:
             result = ScheduleQueryVersionV3Result(cnt, EnumDevice.SYSTEM)
         elif cmd_type == EnumCmdType.SENSOR2_INFO:
@@ -110,6 +123,8 @@ class Decode:
         self._pos = 0
 
     def read1(self):
+        if self.remaining < 1:
+            raise ValueError("not enough bytes for u8")
         pos = self._pos
         s = struct.unpack('<B', self._b[pos:pos + 1])[0]
         pos += 1
@@ -117,6 +132,8 @@ class Decode:
         return s
 
     def read2(self):
+        if self.remaining < 2:
+            raise ValueError("not enough bytes for u16")
         pos = self._pos
         s = struct.unpack('<H', self._b[pos:pos + 2])[0]
         pos += 2
@@ -124,6 +141,8 @@ class Decode:
         return s
 
     def read4(self):
+        if self.remaining < 4:
+            raise ValueError("not enough bytes for u32")
         pos = self._pos
         s = struct.unpack('<I', self._b[pos:pos + 4])[0]
         pos += 4
@@ -131,6 +150,8 @@ class Decode:
         return s
 
     def read(self, l):
+        if l < 0 or self.remaining < l:
+            raise ValueError("not enough bytes")
         pos = self._pos
         s = self._b[pos:pos + l]
         pos += l
@@ -138,6 +159,8 @@ class Decode:
         return s
 
     def read_utf(self, l):
+        if l < 0 or self.remaining < l:
+            raise ValueError("not enough bytes for text")
         pos = self._pos
         try:
             s = self._b[pos:pos + l].decode('utf-8')
@@ -173,7 +196,11 @@ class AckResult(BaseResult):
         BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_ACK)
 
     def load_bytes(self, b):
-        Config.is_new_version = struct.unpack('<B', b)[0] == 2
+        # D611 uses an explicitly verified, immutable profile.  Legacy B/C
+        # entries may learn this one compatibility bit from their first ACK,
+        # but unrelated later ACKs must never change the parser layout.
+        if b:
+            Config.observe_protocol_ack(b[0])
 
 
 class ScheduleQueryVersionV3Result(BaseResult):
@@ -334,32 +361,80 @@ class ErrCodeResult(BaseResult):
     def __init__(self, cmd_id: int, target: EnumDevice):
         BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_ERR_CODE)
         self._code = None
+        self._normalized_code = None
         self._device = None
+        self._device_id = None
         self._room = None
-        self._unit = None
+        self._level = None
+        self._valid = False
+        self._source_timestamp = None
 
     def load_bytes(self, b):
-        dev_id, room, unit = struct.unpack('<iBB', b[:6])
-        self._device = EnumDevice((8, dev_id))
-        self._room = room
-        self._unit = unit
-        self._code = b[6:].decode('ASCII')
+        try:
+            d = Decode(b)
+            self._device_id = struct.unpack("<i", d.read(4))[0]
+            try:
+                self._device = EnumDevice((8, self._device_id))
+            except ValueError:
+                self._device = None
+            self._room = d.read1()
+            d.read1()  # Reserved by the official decoder.
+            level_data = d.read(d.read1())
+            self._level = level_data[0] if len(level_data) == 1 else 1
+            d.read(d.read1())  # Source description is intentionally not exposed.
+            self._code = d.read(d.read1()).decode("ascii")
+            self._normalized_code = "00" if self._code in ("AF", "U4") else self._code
+            self._source_timestamp = time.time()
+            self._valid = True
+        except (UnicodeDecodeError, ValueError, struct.error):
+            self._valid = False
+
+    def do(self):
+        if not self._valid:
+            return
+        from .service import Service
+        Service.set_error_info(
+            code_raw=self._code,
+            code_normalized=self._normalized_code,
+            device_id=self._device_id,
+            device=self._device,
+            room=self._room,
+            level=self._level,
+            source_timestamp=self._source_timestamp,
+        )
 
     @property
     def code(self):
         return self._code
 
     @property
+    def normalized_code(self):
+        return self._normalized_code
+
+    @property
     def device(self):
         return self._device
+
+    @property
+    def device_id(self):
+        return self._device_id
 
     @property
     def room(self):
         return self._room
 
     @property
+    def level(self):
+        return self._level
+
+    @property
     def unit(self):
-        return self._unit
+        """Backward-compatible alias for the formerly misnamed level byte."""
+        return self._level
+
+    @property
+    def valid(self):
+        return self._valid
 
 
 class GetWeatherResult(BaseResult):
@@ -472,6 +547,7 @@ class GetRoomInfoResult(BaseResult):
                     elif EnumDevice.VENTILATION == device or EnumDevice.SMALL_VAM == device:
                         dev = Ventilation()
                         room.ventilation = dev
+                        room.ventilations.append(dev)
                         dev.is_small_vam = EnumDevice.SMALL_VAM == device
                     else:
                         dev = Device()
@@ -506,12 +582,12 @@ class GetRoomInfoResult(BaseResult):
                     bathrooms.append(room.air_con)
                 else:
                     aircons.append(room.air_con)
-            if room.ventilation is not None:
-                room.ventilation.alias = room.alias
-                if room.ventilation.is_small_vam:
-                    small_vams.append(room.ventilation)
+            for ventilation in room.ventilations:
+                ventilation.alias = room.alias
+                if ventilation.is_small_vam:
+                    small_vams.append(ventilation)
                 else:
-                    vents.append(room.ventilation)
+                    vents.append(ventilation)
 
         p = AirConCapabilityQueryParam()
         p.aircons = aircons
@@ -542,11 +618,6 @@ class GetRoomInfoResult(BaseResult):
             p.target = get_device_by_vent(vent)
             p.device = vent
             Service.send_msg(p)
-            if vent.is_small_vam:
-                p = VentilationQueryCompositeSituationParam()
-                p.target = EnumDevice.SMALL_VAM
-                p.device = vent
-                Service.send_msg(p)
 
     @property
     def count(self):
@@ -600,14 +671,224 @@ class HandShakeResult(BaseResult):
 
 class GetGWInfoResult(BaseResult):
     def __init__(self, cmd_id: int, target: EnumDevice):
-        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_HAND_SHAKE)
-        self._time: str = ''
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_GET_GW_INFO)
+        self.gateway_version = None
+        self.wifi_version = None
+        self.gateway_time = None
+        self.source_timestamp = None
+        self.valid = False
 
     def load_bytes(self, b):
-        """todo"""
+        try:
+            d = Decode(b)
+
+            def read_sized_bytes():
+                return d.read(d.read1())
+
+            self.gateway_version = read_sized_bytes().decode("ascii")
+            d.read1()  # DHCP mode; not needed for the diagnostic entity.
+            d.read(6)  # MAC address is deliberately discarded.
+            for _ in range(5):
+                read_sized_bytes()  # IP/mask/gateway/DNS values are discarded.
+
+            gateway_time = d.read(d.read1())
+            if len(gateway_time) >= 7:
+                year = gateway_time[0] | gateway_time[1] << 8
+                self.gateway_time = (
+                    f"{year:04d}-{gateway_time[2]:02d}-{gateway_time[3]:02d} "
+                    f"{gateway_time[4]:02d}:{gateway_time[5]:02d}:{gateway_time[6]:02d}"
+                )
+
+            for _ in range(3):
+                read_sized_bytes()  # Area/distributor fields are sensitive and discarded.
+
+            if d.remaining:
+                self.wifi_version = read_sized_bytes().decode("ascii")
+            self.source_timestamp = time.time()
+            self.valid = True
+        except (UnicodeDecodeError, ValueError, struct.error):
+            self.valid = False
 
     def do(self):
-        """todo"""
+        if not self.valid:
+            return
+        from .service import Service
+        Service.set_gateway_info(
+            gateway_version=self.gateway_version,
+            wifi_version=self.wifi_version,
+            gateway_time=self.gateway_time,
+            source_timestamp=self.source_timestamp,
+        )
+
+
+class GatewaySignalResult(BaseResult):
+    """Non-sensitive Wi-Fi signal result for system command 234."""
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_GATEWAY_SIGNAL_CHECK)
+        self.signal_strength = None
+        self.ping_success_count = None
+        self.network_delay = None
+        self.raw = None
+        self.source_timestamp = None
+        self.valid = False
+
+    def load_bytes(self, b):
+        if len(b) != 4:
+            return
+        signal_strength, ping_success_count, network_delay = struct.unpack("<bbH", b)
+        self.raw = b.hex()
+        self.signal_strength = None if signal_strength == 127 else signal_strength
+        self.ping_success_count = ping_success_count
+        self.network_delay = None if network_delay == 32767 else network_delay
+        self.source_timestamp = time.time()
+        self.valid = True
+
+    def do(self):
+        if not self.valid:
+            return
+        from .service import Service
+        Service.set_gateway_signal(
+            signal_strength=self.signal_strength,
+            ping_success_count=self.ping_success_count,
+            network_delay=self.network_delay,
+            raw=self.raw,
+            source_timestamp=self.source_timestamp,
+        )
+
+
+class FilterServiceLifeResult(BaseResult):
+    """Decode the official local cmd10 VAM filter-used percentages."""
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_FILTER_SERVICE_LIFE)
+        self.has_data = False
+        self.valid = False
+        self.items = []
+        self.source_timestamp = None
+
+    def load_bytes(self, b):
+        try:
+            d = Decode(b)
+            count = d.read1()
+            for _ in range(count):
+                reserved_before_room = d.read1()
+                room = d.read1()
+                reserved_before_percent = d.read1()
+                used_percent_raw = d.read1()
+                self.items.append({
+                    "room": room,
+                    "used_percent": (
+                        None if used_percent_raw == 0xFF else used_percent_raw
+                    ),
+                    "used_percent_raw": used_percent_raw,
+                    "reserved_before_room": reserved_before_room,
+                    "reserved_before_percent": reserved_before_percent,
+                })
+            if d.remaining != 0:
+                return
+            self.valid = True
+            self.has_data = count > 0
+            self.source_timestamp = time.time()
+        except ValueError:
+            self.valid = False
+
+    def do(self):
+        if self.valid:
+            from .service import Service
+            Service.set_filter_service_life(
+                self.items, source_timestamp=self.source_timestamp
+            )
+            Service.set_feature_support(
+                "filter_service_life", source_timestamp=self.source_timestamp
+            )
+
+
+class FilterCleanSignResult(BaseResult):
+    """Decode the official local cmd9 filter-clean reminder notification."""
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_FILTER_CLEAN_SIGN)
+        self.device_id = None
+        self.device = None
+        self.room = None
+        self.status = None
+        self.source_timestamp = None
+        self.valid = False
+
+    def load_bytes(self, b):
+        try:
+            d = Decode(b)
+            self.device_id = struct.unpack("<i", d.read(4))[0]
+            try:
+                self.device = EnumDevice((8, self.device_id))
+            except ValueError:
+                self.device = None
+            self.room = d.read1()
+            d.read1()  # Reserved by the official decoder.
+            self.status = d.read1()
+            if d.remaining != 0:
+                return
+            self.source_timestamp = time.time()
+            self.valid = True
+        except (ValueError, struct.error):
+            self.valid = False
+
+    def do(self):
+        if not self.valid:
+            return
+        from .service import Service
+        Service.set_filter_clean_sign(
+            device_id=self.device_id,
+            device=self.device,
+            room=self.room,
+            status=self.status,
+            source_timestamp=self.source_timestamp,
+        )
+
+
+class DaikinCareExponentFeatureResult(BaseResult):
+    """Validate command 220 for feature detection only."""
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.SYS_DAIKIN_CARE_EXPONENT)
+        self.has_data = False
+        self.valid = False
+        self.source_timestamp = None
+
+    def load_bytes(self, b):
+        try:
+            d = Decode(b)
+            d.read1()  # Unmapped global flag; intentionally not exposed.
+            d.read1()  # Global Air View switch; no entity is created here.
+            room_count = d.read1()
+            for _ in range(room_count):
+                d.read1()
+                d.read(4)
+                d.read1()
+                terminated = False
+                while d.remaining:
+                    key = d.read1()
+                    if key == 0:
+                        terminated = True
+                        break
+                    d.read(d.read1())
+                if not terminated:
+                    return
+            if d.remaining != 0:
+                return
+            self.valid = True
+            self.has_data = room_count > 0
+            self.source_timestamp = time.time()
+        except ValueError:
+            self.valid = False
+
+    def do(self):
+        if self.valid:
+            from .service import Service
+            Service.set_feature_support(
+                "daikin_care_exponent", source_timestamp=self.source_timestamp
+            )
 
 
 class CmdTransferResult(BaseResult):
@@ -616,6 +897,106 @@ class CmdTransferResult(BaseResult):
 
     def load_bytes(self, b):
         """todo"""
+
+
+class AirConInletTempAndHumidityQueryResult(BaseResult):
+    """Decode official App cmd243 without naming unproven TLV keys."""
+
+    _TEMPERATURE_REASONABLE_RANGE_C = (-40.0, 85.0)
+    _HUMIDITY_REASONABLE_RANGE_PERCENT = (0.0, 100.0)
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(
+            self,
+            cmd_id,
+            target,
+            OfficialSystemCmd.AIR_CON_INLET_TEMP_AND_HUMIDITY_INFO_QUERY,
+        )
+        self._items = []
+
+    def load_bytes(self, b):
+        d = Decode(b)
+        if d.remaining < 1:
+            return
+
+        count = d.read1()
+        for _ in range(count):
+            if d.remaining < 1:
+                break
+
+            item = {
+                "room": d.read1(),
+                "inlet_raw_tlvs": [],
+                "inlet_parse_status": "complete",
+                "source_timestamp": time.time(),
+            }
+            terminated = False
+            while d.remaining:
+                key = d.read1()
+                if key == 0:
+                    terminated = True
+                    break
+                if d.remaining < 1:
+                    item["inlet_parse_status"] = "missing_length"
+                    break
+                length = d.read1()
+                if length > d.remaining:
+                    raw = d.read(d.remaining)
+                    item["inlet_parse_status"] = "truncated"
+                else:
+                    raw = d.read(length)
+                item["inlet_raw_tlvs"].append(
+                    {"key": key, "length": length, "raw": raw.hex()}
+                )
+
+                if len(raw) == length:
+                    if key == 1 and length == 2:
+                        value = struct.unpack("<h", raw)[0] / 10.0
+                        item["inlet_temperature_c"] = value
+                        low, high = self._TEMPERATURE_REASONABLE_RANGE_C
+                        item["inlet_temperature_quality"] = (
+                            "valid" if low <= value <= high else "out_of_range"
+                        )
+                    elif key == 2 and length == 2:
+                        value = struct.unpack("<h", raw)[0] / 10.0
+                        item["inlet_humidity_percent"] = value
+                        low, high = self._HUMIDITY_REASONABLE_RANGE_PERCENT
+                        item["inlet_humidity_quality"] = (
+                            "valid" if low <= value <= high else "out_of_range"
+                        )
+
+                if len(raw) < length:
+                    break
+
+            if not terminated and item["inlet_parse_status"] == "complete":
+                item["inlet_parse_status"] = "missing_terminator"
+
+            # Malformed records remain visible as raw evidence, but their
+            # semantic values must never replace last confirmed observations.
+            if item["inlet_parse_status"] != "complete":
+                item.pop("inlet_temperature_c", None)
+                item.pop("inlet_humidity_percent", None)
+                item.pop("inlet_temperature_quality", None)
+                item.pop("inlet_humidity_quality", None)
+            else:
+                item.setdefault("inlet_temperature_quality", "missing")
+                item.setdefault("inlet_humidity_quality", "missing")
+
+            self._items.append(item)
+
+    def do(self):
+        complete_items = [
+            item for item in self._items
+            if item.get("inlet_parse_status") == "complete"
+        ]
+        if complete_items:
+            from .service import Service
+
+            Service.set_aircon_inlet_observations(complete_items)
+
+    @property
+    def items(self):
+        return self._items
 
 
 class AirConCleaningQueryResult(BaseResult):
@@ -636,31 +1017,77 @@ class AirConCleaningQueryResult(BaseResult):
             if d.remaining < 3:
                 break
 
-            item = {"room": d.read1()}
-            d.read1()
-            item["unit"] = d.read1()
+            item = {
+                "room": d.read1(),
+                "protocol_header_raw": d.read(2).hex(),
+                "heat_exchange_cleaning_raw_tlvs": [],
+                "heat_exchange_cleaning_parse_status": "complete",
+                "source_timestamp": time.time(),
+            }
 
+            terminated = False
             while d.remaining > 0:
                 key = d.read1()
                 if key == 0:
+                    terminated = True
                     break
                 if d.remaining < 1:
+                    item["heat_exchange_cleaning_parse_status"] = "missing_length"
                     break
                 length = d.read1()
                 if length > d.remaining:
                     raw = d.read(d.remaining)
+                    item["heat_exchange_cleaning_parse_status"] = "truncated"
                 else:
                     raw = d.read(length)
-                value = int.from_bytes(raw, "little", signed=False)
+                item["heat_exchange_cleaning_raw_tlvs"].append(
+                    {"key": key, "length": length, "raw": raw.hex()}
+                )
 
-                if key == 4:
-                    item["heat_exchange_cleaning_allow"] = value == 1
-                elif key == 5:
-                    item["heat_exchange_cleaning_status"] = value
-                elif key == 7:
-                    item["heat_exchange_cleaning_phase_duration"] = value
-                elif key == 8:
-                    item["heat_exchange_cleaning_percent"] = value
+                if len(raw) == length:
+                    if key == 4 and length == 1:
+                        item["heat_exchange_cleaning_capability"] = raw[0]
+                    elif key == 5 and length == 1:
+                        item["heat_exchange_cleaning_can_join"] = raw[0]
+                    elif key == 6 and length == 1:
+                        item["heat_exchange_cleaning_work_state"] = raw[0]
+                    elif key == 7 and length == 2:
+                        item["heat_exchange_cleaning_phase_duration"] = int.from_bytes(raw, "little")
+                    elif key == 8 and length == 2:
+                        item["heat_exchange_cleaning_v_sleep_value_1"] = raw[0]
+                        item["heat_exchange_cleaning_v_sleep_value_2"] = raw[1]
+                    elif key == 14 and length == 1:
+                        item["heat_exchange_cleaning_finish"] = raw[0]
+                    elif key == 15 and length == 1:
+                        item["heat_exchange_cleaning_outdoor_status"] = raw[0]
+                    elif key in (16, 17, 18, 19, 20):
+                        expected_length = 2 if key == 19 else 1
+                        if length == expected_length:
+                            if key == 18:
+                                low_nibble = raw[0] & 0x0F
+                                value = 1 if raw[0] & 0x80 and low_nibble == 0 else low_nibble
+                            else:
+                                value = int.from_bytes(raw, "little")
+                            item[f"vam_cleaning_tlv_{key}"] = value
+                            item["vam_cleaning_semantic_status"] = "unmapped"
+
+                if length > len(raw):
+                    break
+
+            if not terminated and item["heat_exchange_cleaning_parse_status"] == "complete":
+                item["heat_exchange_cleaning_parse_status"] = "missing_terminator"
+
+            if item["heat_exchange_cleaning_parse_status"] != "complete":
+                evidence_keys = {
+                    "room",
+                    "protocol_header_raw",
+                    "heat_exchange_cleaning_raw_tlvs",
+                    "heat_exchange_cleaning_parse_status",
+                    "source_timestamp",
+                }
+                for field in list(item):
+                    if field not in evidence_keys:
+                        del item[field]
 
             self._items.append(item)
 
@@ -685,6 +1112,12 @@ class AirConCleaningControlResult(BaseResult):
         d = Decode(b)
         self.success = d.read1() == 0
         self.code = d.read1()
+
+    def do(self):
+        # Query authoritative state only after the gateway accepted cmd36.
+        if self.success:
+            from .service import Service
+            Service.send_msg(AirConCleaningQueryParam())
 
 
 class QueryScheduleFinish(BaseResult):
@@ -715,7 +1148,9 @@ class AirConStatusChangedResult(BaseResult):
         if flag & EnumControl.Type.AIR_FLOW:
             status.air_flow = EnumControl.AirFlow(d.read1())
         if flag & EnumControl.Type.CURRENT_TEMP:
-            status.current_temp = d.read2()
+            # Official AirConStatusChangeDTO (cmd2), like cmd3, defines bit 3
+            # as one reserved byte.  Never publish it as a temperature.
+            d.read1()
         if flag & EnumControl.Type.SETTED_TEMP:
             status.setted_temp = d.read2()
         if Config.is_new_version:
@@ -738,19 +1173,23 @@ class AirConQueryStatusResult(BaseResult):
         BaseResult.__init__(self, cmd_id, target, EnumCmdType.QUERY_STATUS)
         self.unit = 0
         self.room = 0
-        self.current_temp = 0
-        self.setted_temp = 0
-        self.switch = EnumControl.Switch.OFF
-        self.air_flow = EnumControl.AirFlow.AUTO
-        self.breathe = EnumControl.Breathe.CLOSE
-        self.fan_direction1 = EnumControl.FanDirection.INVALID
-        self.fan_direction2 = EnumControl.FanDirection.INVALID
-        self.humidity = EnumControl.Humidity.CLOSE
-        self.mode = EnumControl.Mode.AUTO
-        self.hum_allow = False
-        self.fresh_air_allow = False
-        self.fresh_air_humidification = FreshAirHumidification.OFF
-        self.three_d_fresh = ThreeDFresh.CLOSE
+        # QUERY_STATUS is a bitmask-based partial response.  Keep every
+        # optional field unknown until its flag is actually present; using
+        # protocol-looking defaults here fabricates OFF/AUTO/0 updates and can
+        # overwrite the last real state when a device sends a partial packet.
+        self.current_temp = None
+        self.setted_temp = None
+        self.switch = None
+        self.air_flow = None
+        self.breathe = None
+        self.fan_direction1 = None
+        self.fan_direction2 = None
+        self.humidity = None
+        self.mode = None
+        self.hum_allow = None
+        self.fresh_air_allow = None
+        self.fresh_air_humidification = None
+        self.three_d_fresh = None
 
     def load_bytes(self, b):
         d = Decode(b)
@@ -787,7 +1226,11 @@ class AirConQueryStatusResult(BaseResult):
                         self.three_d_fresh = ThreeDFresh(d.read1())
         else:
             if flag >> 3 & 1:
-                self.current_temp = d.read2()
+                # In the official AirConStatusQueryDTO used by DTA117D611,
+                # bit 3 is one reserved byte.  It is not a temperature.  The
+                # former two-byte read both fabricated a value and shifted
+                # every following field by one byte.
+                d.read1()
             if flag >> 4 & 1:
                 self.setted_temp = d.read2()
             if Config.is_new_version:
@@ -873,11 +1316,12 @@ class AirConCapabilityQueryResult(BaseResult):
 
                     flag = d.read1()
                     aircon.out_door_run_cond = EnumOutDoorRunCond(flag >> 6 & 3)
+                    aircon.fan_volume_mute = bool(flag >> 5 & 1)
                     aircon.more_dry_mode = flag >> 4 & 1
                     aircon.pre_heat_mode = flag >> 3 & 1
-                    aircon.auto_dry_mode = flag >> 2 & 1
+                    aircon.sleep_mode = flag >> 2 & 1
                     aircon.relax_mode = flag >> 1 & 1
-                    aircon.sleep_mode = flag & 1
+                    aircon.auto_dry_mode = flag & 1
                 else:
                     d.read1()
                 self._air_cons.append(aircon)
@@ -956,8 +1400,9 @@ class VentilationCapabilityQueryResult(BaseResult):
 
     def do(self):
         from .service import Service
-        if Service.is_ready():
-            for i in self._vents:
+        for i in self._vents:
+            Service.set_ventilation_capability(i)
+            if Service.is_ready():
                 Service.update_ventilation(get_device_by_vent(i), i.room_id, i.unit_id, vent=i)
 
 
@@ -983,50 +1428,72 @@ class VentilationQueryStatusResult(BaseResult):
 
     def do(self):
         from .service import Service
-        Service.set_ventilation_status(self._room, self._unit, self._status)
+        Service.set_ventilation_status(self.target, self._room, self._unit, self._status)
 
 
 class VentilationQueryCompositeSituationResult(BaseResult):
+    """Preserve cmd52 evidence without publishing unverified sensor semantics.
+
+    The official MiniVAM decoder has a seven-byte header after room/reserved
+    and treats key 0 as a one-byte terminator.  Only TLV key 5 is currently
+    proven to be a signed temperature in tenths; keys 1-4 are intentionally
+    left unnamed.  This result is not polled and ``do`` is deliberately a
+    no-op so a partial or misunderstood response cannot overwrite live VAM
+    state.
+    """
+
     def __init__(self, cmd_id: int, target: EnumDevice):
         BaseResult.__init__(self, cmd_id, target, EnumCmdType.SMALL_VAM_QUERY_COMPOSITE_SITUATION)
         self._room = 0
-        self._unit = 0
-        self._in_door_temp = UNINITIALIZED_VALUE
-        self._out_door_temp = UNINITIALIZED_VALUE
-        self._out_door_humidity = UNINITIALIZED_VALUE
-        self._pm25 = UNINITIALIZED_VALUE
+        self._reserved = 0
+        self._service_code_raw = ""
+        self._header_raw = ""
+        self._raw_tlvs = []
+        self._temperature = None
+        self._trailing_raw = ""
+        self._parse_status = "unknown"
 
     def load_bytes(self, b):
         d = Decode(b)
+        if d.remaining < 9:
+            self._parse_status = "truncated_header"
+            self._trailing_raw = d.read(d.remaining).hex()
+            return
+
         self._room = d.read1()
-        self._unit = d.read1()
-        while d.remaining >= 2:
+        self._reserved = d.read1()
+        self._service_code_raw = d.read(4).hex()
+        self._header_raw = d.read(3).hex()
+
+        while d.remaining:
             status_type = d.read1()
-            status_size = d.read1()
             if status_type == 0:
-                break
+                self._parse_status = "complete"
+                self._trailing_raw = d.read(d.remaining).hex()
+                return
+            if d.remaining < 1:
+                self._parse_status = "truncated_tlv_length"
+                return
+            status_size = d.read1()
             if status_size > d.remaining:
-                break
-            if status_type == 1 and status_size == 2:
-                self._in_door_temp = d.read2()
-            elif status_type == 2 and status_size == 2:
-                self._out_door_humidity = d.read2()
-            elif status_type == 3 and status_size == 2:
-                self._out_door_temp = d.read2()
-            elif status_type == 4 and status_size == 2:
-                self._pm25 = d.read2()
-            else:
-                d.read(status_size)
+                raw = d.read(d.remaining)
+                self._raw_tlvs.append(
+                    {"key": status_type, "length": status_size, "raw": raw.hex()}
+                )
+                self._parse_status = "truncated_tlv_value"
+                return
+
+            raw = d.read(status_size)
+            self._raw_tlvs.append(
+                {"key": status_type, "length": status_size, "raw": raw.hex()}
+            )
+            if status_type == 5 and status_size == 2:
+                self._temperature = struct.unpack("<h", raw)[0] / 10
+
+        self._parse_status = "missing_terminator"
 
     def do(self):
-        from .service import Service
-        status = VentilationStatus(
-            in_door_temp=self._in_door_temp,
-            out_door_temp=self._out_door_temp,
-            out_door_humidity=self._out_door_humidity,
-            pm25=self._pm25,
-        )
-        Service.set_ventilation_status(self._room, self._unit, status)
+        return None
 
 
 class UnknownResult(BaseResult):

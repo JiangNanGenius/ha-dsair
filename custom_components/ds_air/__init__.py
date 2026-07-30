@@ -9,7 +9,21 @@ from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 
 from .hass_inst import GetHass
-from .const import CONF_GW, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_GW, DOMAIN
+from .const import (
+    CONF_GW,
+    CONF_ZHONGHONG_HOST,
+    CONF_ZHONGHONG_OUTER_ADDRESS,
+    CONF_ZHONGHONG_POLL_INTERVAL,
+    CONF_ZHONGHONG_PORT,
+    CONF_ZHONGHONG_TEMPERATURE_ENABLED,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    DEFAULT_ZHONGHONG_HOST,
+    DEFAULT_ZHONGHONG_OUTER_ADDRESS,
+    DEFAULT_ZHONGHONG_POLL_INTERVAL,
+    DEFAULT_ZHONGHONG_PORT,
+    DOMAIN,
+)
 from .ds_air_service.config import Config
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,11 +57,31 @@ async def async_setup_entry(
     hass.data[DOMAIN][CONF_GW] = gw
     hass.data[DOMAIN][CONF_SCAN_INTERVAL] = scan_interval
 
-    Config.is_c611 = gw == DEFAULT_GW
+    Config.configure_gateway(gw)
 
     from .ds_air_service.service import Service
     await hass.async_add_executor_job(Service.init, host, port, scan_interval)
+    observer = None
+    if entry.options.get(CONF_ZHONGHONG_TEMPERATURE_ENABLED, False):
+        from .zhonghong_temperature import ZhonghongTemperatureObserver
+        observer = ZhonghongTemperatureObserver(
+            host=entry.options.get(CONF_ZHONGHONG_HOST, DEFAULT_ZHONGHONG_HOST),
+            port=int(entry.options.get(
+                CONF_ZHONGHONG_PORT, DEFAULT_ZHONGHONG_PORT
+            )),
+            poll_interval=float(entry.options.get(
+                CONF_ZHONGHONG_POLL_INTERVAL,
+                DEFAULT_ZHONGHONG_POLL_INTERVAL,
+            )),
+            outer_address=int(entry.options.get(
+                CONF_ZHONGHONG_OUTER_ADDRESS,
+                DEFAULT_ZHONGHONG_OUTER_ADDRESS,
+            )),
+        )
+        hass.data[DOMAIN]["zhonghong_temperature_observer"] = observer
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    if observer is not None:
+        await observer.async_start()
     entry.async_on_unload(entry.add_update_listener(update_listener))
 
     return True
@@ -57,6 +91,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if hass.data[DOMAIN].get("listener") is not None:
         hass.data[DOMAIN].get("listener")()
+    for remove in hass.data[DOMAIN].pop("zhonghong_temperature_listeners", []):
+        remove()
+    observer = hass.data[DOMAIN].pop("zhonghong_temperature_observer", None)
+    if observer is not None:
+        await observer.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     from .ds_air_service.service import Service
     Service.destroy()

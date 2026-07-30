@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import CONF_FORCE_HEAT_MODE, DOMAIN
 from .ds_air_service.ctrl_enum import EnumControl
 from .ds_air_service.dao import AirCon, AirConStatus
 from .fan_direction import (
@@ -32,6 +32,22 @@ _BREATHE_OPTIONS = {
     "强": EnumControl.Breathe.STRONG,
 }
 
+_WORK_MODE_OPTIONS = {
+    "制冷": (EnumControl.Mode.COLD, "cool", "cool_mode"),
+    "除湿": (EnumControl.Mode.DRY, "dry", "dry_mode"),
+    "送风": (EnumControl.Mode.VENTILATION, "fan_only", "ventilation_mode"),
+    "自动": (EnumControl.Mode.AUTO, "auto", "auto_mode"),
+    "制热": (EnumControl.Mode.HEAT, "heat", "heat_mode"),
+    "自动除湿": (EnumControl.Mode.AUTODRY, "auto_dry", "auto_dry_mode"),
+    "清爽": (EnumControl.Mode.RELAX, "comfort", "relax_mode"),
+    "睡眠": (EnumControl.Mode.SLEEP, "sleep", "sleep_mode"),
+    "预热": (EnumControl.Mode.PREHEAT, "preheat", "pre_heat_mode"),
+    "强力除湿": (EnumControl.Mode.MOREDRY, "more_dry", "more_dry_mode"),
+}
+_WORK_MODE_OPTION_BY_ENUM = {
+    mode: option for option, (mode, _key, _capability) in _WORK_MODE_OPTIONS.items()
+}
+
 _STATUS_ATTRS = (
     "switch",
     "mode",
@@ -52,7 +68,10 @@ async def async_setup_entry(
     from .ds_air_service.service import Service
 
     selects = []
+    force_heat_mode = bool(entry.options.get(CONF_FORCE_HEAT_MODE, False))
     for aircon in Service.get_aircons():
+        if work_mode_options(aircon, force_heat_mode):
+            selects.append(DsAirWorkModeSelect(aircon, force_heat_mode))
         for axis in (AXIS_VERTICAL, AXIS_HORIZONTAL):
             if direction_supported(aircon, axis):
                 selects.append(DsAirDirectionSelect(aircon, axis))
@@ -133,10 +152,66 @@ class DsAirDirectionSelect(DsAirSelectBase):
             self.schedule_update_ha_state()
             return
 
-        if new_status.fan_direction1 is not None:
-            status.fan_direction1 = new_status.fan_direction1
-        if new_status.fan_direction2 is not None:
-            status.fan_direction2 = new_status.fan_direction2
+        from .ds_air_service.service import Service
+
+        Service.control(self._device_info, new_status)
+        self.schedule_update_ha_state()
+
+
+class DsAirWorkModeSelect(DsAirSelectBase):
+    """Exact DS-AIR work mode, including model-specific independent modes."""
+
+    def __init__(self, aircon: AirCon, force_heat_mode: bool = False):
+        super().__init__(aircon)
+        self._force_heat_mode = force_heat_mode
+        self._attr_unique_id = f"{aircon.unique_id}_native_work_mode"
+        # HA 2026.7 does not consume ``_attr_suggested_object_id`` here.  Set a
+        # deterministic entity id before first registration so Node-RED can
+        # address the exact native mode without depending on Chinese slugging.
+        self.entity_id = f"select.ds_air_{aircon.room_id}_{aircon.unit_id}_native_work_mode"
+        # This is the indoor unit's real Daikin work mode, not a preset or a
+        # diagnostic-only raw value.  Keep the stable entity id for existing
+        # Node-RED consumers, while presenting the concise user-facing name.
+        self._attr_name = "工作模式"
+        self._attr_icon = "mdi:hvac"
+        self._attr_options = work_mode_options(aircon, force_heat_mode)
+
+    @property
+    def available(self):
+        """Return whether at least one native mode capability is known."""
+        return bool(work_mode_options(self._device_info, self._force_heat_mode))
+
+    @property
+    def current_option(self) -> Optional[str]:
+        """Return the exact physical mode reported by the Daikin gateway."""
+        return _WORK_MODE_OPTION_BY_ENUM.get(self._device_info.status.mode)
+
+    @property
+    def extra_state_attributes(self):
+        """Expose stable raw evidence for Node-RED and diagnostics."""
+        mode = self._device_info.status.mode
+        item = _WORK_MODE_OPTIONS.get(self.current_option or "")
+        return {
+            "ds_air_native_mode": item[1] if item else None,
+            "ds_air_native_mode_code": None if mode is None else int(mode.value),
+            "ds_air_room_id": self._device_info.room_id,
+            "ds_air_unit_id": self._device_info.unit_id,
+            "ds_air_evidence": "gateway_status" if mode is not None else "unknown",
+        }
+
+    def select_option(self, option: str) -> None:
+        """Send an exact native mode and wait for gateway status confirmation."""
+        if option not in self._attr_options:
+            self.schedule_update_ha_state()
+            return
+        mode = _WORK_MODE_OPTIONS[option][0]
+        status = self._device_info.status
+        if status.switch == EnumControl.Switch.ON and status.mode == mode:
+            self.schedule_update_ha_state()
+            return
+        new_status = AirConStatus(mode=mode)
+        if status.switch != EnumControl.Switch.ON:
+            new_status.switch = EnumControl.Switch.ON
 
         from .ds_air_service.service import Service
 
@@ -174,9 +249,6 @@ class DsAirBreatheSelect(DsAirSelectBase):
         if status.switch != EnumControl.Switch.ON and breathe != EnumControl.Breathe.CLOSE:
             new_status.switch = EnumControl.Switch.ON
             new_status.mode = EnumControl.Mode.VENTILATION
-            status.switch = EnumControl.Switch.ON
-            status.mode = EnumControl.Mode.VENTILATION
-        status.breathe = breathe
 
         from .ds_air_service.service import Service
 
@@ -186,6 +258,16 @@ class DsAirBreatheSelect(DsAirSelectBase):
 
 def breathe_supported(aircon: AirCon) -> bool:
     return aircon.bath_room
+
+
+def work_mode_options(aircon: AirCon, force_heat_mode: bool = False) -> list[str]:
+    """Build an exact per-device mode list from the native capability bits."""
+    return [
+        option
+        for option, (_mode, _key, capability) in _WORK_MODE_OPTIONS.items()
+        if bool(getattr(aircon, capability, False))
+        or (option == "制热" and force_heat_mode)
+    ]
 
 
 def _apply_status(status: AirConStatus, new_status: AirConStatus) -> None:

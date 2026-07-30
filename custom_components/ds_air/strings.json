@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "DS-AIR",
-        "description": "Support DTA117B611/DTA117C611",
+        "description": "Support DTA117B611/DTA117C611/DTA117D611",
         "data": {
           "host": "Host",
           "port": "Port",
@@ -33,7 +33,10 @@
         "title": "DS-AIR",
         "menu_options": {
             "adjust_config": "Adjust config",
-            "bind_sensors": "Link sensors"
+            "bind_return_temperatures": "Bind return temperatures",
+            "bind_sensors": "Link sensors",
+            "capability_overrides": "Capability overrides",
+            "zhonghong_temperature_source": "Zhonghong read-only diagnostics"
         }
       },
       "adjust_config": {
@@ -65,6 +68,32 @@
         "empty": {
           "title": "No data",
           "description": "No AC for link"
+        }
+      },
+      "bind_return_temperatures": {
+        "title": "Bind return temperature",
+        "description": "Choose a temperature sensor or an HA climate entity. Climate entities are read from current_temperature.",
+        "data": {
+          "climate": "Native Daikin indoor unit",
+          "temperature_source": "HA temperature source (blank to clear)"
+        }
+      },
+      "capability_overrides": {
+        "title": "Capability overrides",
+        "description": "Use only for capabilities proven by another controller when the Daikin gateway reports a contextual capability mask.",
+        "data": {
+          "force_heat_mode": "Expose heating mode"
+        }
+      },
+      "zhonghong_temperature_source": {
+        "title": "Zhonghong read-only diagnostics and return temperature",
+        "description": "Read checksum-verified 0x50 status, fault codes, and return temperatures. No Zhonghong control commands or entities are created.",
+        "data": {
+          "zhonghong_temperature_enabled": "Enable read-only status observer",
+          "zhonghong_host": "Gateway host",
+          "zhonghong_port": "Gateway TCP port",
+          "zhonghong_outer_address": "Outer address",
+          "zhonghong_poll_interval": "Polling interval (seconds)"
         }
       }
     }

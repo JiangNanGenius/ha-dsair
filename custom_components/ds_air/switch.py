@@ -30,6 +30,8 @@ async def async_setup_entry(
 class DsAirHeatExchangeCleaningSwitch(SwitchEntity):
     """Selection switch for one air conditioner in a self-cleaning batch."""
 
+    _attr_entity_registry_enabled_default = False
+
     def __init__(self, aircon: AirCon):
         self._device_info = aircon
         self._attr_unique_id = f"{aircon.unique_id}_heat_exchange_cleaning_selected"
@@ -46,7 +48,9 @@ class DsAirHeatExchangeCleaningSwitch(SwitchEntity):
 
     @property
     def available(self):
-        return self._device_info.heat_exchange_cleaning_allow
+        from .ds_air_service.service import Service
+
+        return Service.is_heat_exchange_cleaning_joinable(self._device_info)
 
     @property
     def is_on(self):

@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "金制空气",
-        "description": "本插件支持大金DTA117B611/DTA117C611两款空调网关",
+        "description": "本插件支持大金 DTA117B611/DTA117C611/DTA117D611 空调网关",
         "data": {
           "host": "网关IP",
           "port": "网关端口",
@@ -33,7 +33,10 @@
         "title": "金制空气",
         "menu_options": {
             "adjust_config": "调整设置",
-            "bind_sensors": "关联传感器"
+            "bind_return_temperatures": "绑定回风温度",
+            "bind_sensors": "关联传感器",
+            "capability_overrides": "能力覆盖",
+            "zhonghong_temperature_source": "中弘只读诊断与回风温度"
         }
       },
       "adjust_config": {
@@ -65,6 +68,32 @@
         "empty": {
           "title": "无数据",
           "description": "没有可操作的空调"
+        }
+      },
+      "bind_return_temperatures": {
+        "title": "绑定回风温度",
+        "description": "可选择温度传感器或 HA 空调实体；空调实体读取 current_temperature 属性。",
+        "data": {
+          "climate": "大金原生内机",
+          "temperature_source": "HA 温度来源（留空表示解除绑定）"
+        }
+      },
+      "capability_overrides": {
+        "title": "能力覆盖",
+        "description": "仅当其他控制器已经证明设备支持、而大金网关返回了场景化能力掩码时使用。",
+        "data": {
+          "force_heat_mode": "显示制热模式"
+        }
+      },
+      "zhonghong_temperature_source": {
+        "title": "中弘只读诊断与回风温度",
+        "description": "只读取并校验 0x50 状态、故障码和回风温度；不创建中弘控制实体，也不发送任何中弘控制命令。",
+        "data": {
+          "zhonghong_temperature_enabled": "启用只读状态采集",
+          "zhonghong_host": "中弘网关地址",
+          "zhonghong_port": "TCP 端口",
+          "zhonghong_outer_address": "外机地址",
+          "zhonghong_poll_interval": "轮询间隔（秒）"
         }
       }
     }

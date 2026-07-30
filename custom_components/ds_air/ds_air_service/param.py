@@ -1,11 +1,18 @@
 import struct
 import typing
+from enum import IntEnum
 from typing import Optional
 
 from .config import Config
 from .dao import AirCon, Device, get_device_by_aircon, AirConStatus, Ventilation, VentilationStatus, get_device_by_vent
 from .base_bean import BaseBean
 from .ctrl_enum import EnumCmdType, EnumDevice, EnumControl, EnumFanDirection, EnumFanVolume
+
+
+class OfficialSystemCmd(IntEnum):
+    """Official-app system commands absent from the legacy integration enum."""
+
+    AIR_CON_INLET_TEMP_AND_HUMIDITY_INFO_QUERY = 243
 
 
 class Encode:
@@ -103,6 +110,71 @@ class GetGWInfoParam(SystemParam):
         SystemParam.__init__(self, EnumCmdType.SYS_GET_GW_INFO, True)
 
 
+class GatewaySignalQueryParam(SystemParam):
+    """Request gateway Wi-Fi link diagnostics (command 234)."""
+
+    def __init__(self, target: int = 0):
+        SystemParam.__init__(self, EnumCmdType.SYS_GATEWAY_SIGNAL_CHECK, True)
+        self._signal_target = target
+
+    def generate_subbody(self, s):
+        s.write1(self._signal_target)
+
+
+class FilterServiceLifeQueryParam(SystemParam):
+    """Feature-detection query for command 10; no values are synthesized."""
+
+    def __init__(self):
+        SystemParam.__init__(self, EnumCmdType.SYS_FILTER_SERVICE_LIFE, True)
+
+
+class FilterCleanSignResetParam(SystemParam):
+    """Reset local filter-clean reminder bits for one room (official cmd21)."""
+
+    def __init__(self, device: AirCon, filter_status: int = 7):
+        SystemParam.__init__(
+            self, EnumCmdType.SYS_FILTER_CLEAN_SIGN_RESET, True
+        )
+        self._device = device
+        # Official App accepts individual 1/2/4 flags and uses 7 for reset-all.
+        self._filter_status = filter_status if filter_status in (1, 2, 4) else 7
+
+    def generate_subbody(self, s):
+        s.write4(get_device_by_aircon(self._device).value[1])
+        s.write1(int(self._device.room_id))
+        s.write1(0)  # Reserved by the official DTO.
+        s.write1(self._filter_status)
+
+
+class DaikinCareExponentQueryParam(SystemParam):
+    """Feature-detection query for command 220."""
+
+    def __init__(self):
+        SystemParam.__init__(self, EnumCmdType.SYS_DAIKIN_CARE_EXPONENT, True)
+
+    def generate_subbody(self, s):
+        s.write1(255)
+
+
+class AirConInletTempAndHumidityQueryParam(SystemParam):
+    """Read room-scoped inlet temperature and humidity (official cmd243)."""
+
+    def __init__(self):
+        SystemParam.__init__(
+            self,
+            OfficialSystemCmd.AIR_CON_INLET_TEMP_AND_HUMIDITY_INFO_QUERY,
+            True,
+        )
+        # The official 大金空气 App leaves BaseDTO's subbody version at zero
+        # for cmd243.  The legacy integration default is one, so pin this
+        # command explicitly instead of inheriting the incompatible default.
+        self.subbody_ver = 0
+
+    def generate_subbody(self, s):
+        # The official 大金空气 App sends unsigned 0xFF to query all rooms.
+        s.write1(255)
+
+
 class AirConCleaningQueryParam(SystemParam):
     def __init__(self):
         SystemParam.__init__(self, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_QUERY, True)
@@ -125,15 +197,19 @@ class AirConCleaningQueryParam(SystemParam):
 
 class AirConCleaningControlParam(SystemParam):
     def __init__(self, aircons: typing.List[AirCon], switch_status: int = 1):
-        SystemParam.__init__(self, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_SETTING, False)
+        SystemParam.__init__(self, EnumCmdType.AIR_CON_CLEANING_AND_V_SLEEP_SETTING, True)
         self._aircons = aircons
         self._switch_status = switch_status
 
     def generate_subbody(self, s):
-        s.write1(len(self._aircons))
-        for aircon in self._aircons:
-            s.write1(aircon.room_id)
-            s.write1(aircon.unit_id)
+        # cmd36 is room-scoped.  The official request record is
+        # index, room, reserved, type, cleaning TLV, record terminator.
+        room_ids = list(dict.fromkeys(aircon.room_id for aircon in self._aircons))
+        s.write1(len(room_ids))
+        for record_index, room_id in enumerate(room_ids):
+            s.write1(record_index)
+            s.write1(room_id)
+            s.write1(0)
             s.write1(2)
             s.write1(4)
             s.write1(1)
@@ -375,7 +451,8 @@ class VentilationQueryCompositeSituationParam(VentilationParam):
 
     def generate_subbody(self, s):
         s.write1(self._device.room_id)
-        s.write1(self._device.unit_id)
+        # The official MiniVAM request uses a reserved zero byte, not unit_id.
+        s.write1(0)
 
     @property
     def device(self):

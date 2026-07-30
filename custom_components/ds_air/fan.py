@@ -61,7 +61,8 @@ class DsVent(FanEntity):
             self._attr_preset_modes = _MODE_VENT_NAME_LIST_SMALL_VAM
         else:
             self._attr_supported_features = STANDARD_VAM_SUPPORT
-            self._attr_speed_count = len(_MODE_VENT_NAME_LIST_STANDARD_VAM)
+            # Standard VAM exposes only weak (1) and strong (3).
+            self._attr_speed_count = 2
             self._attr_preset_modes = _MODE_VENT_NAME_LIST_STANDARD_VAM
 
         Service.register_vent_hook(vent, self._status_change_hook)
@@ -92,7 +93,7 @@ class DsVent(FanEntity):
         if air_flow is None:
             return None
         if self._device_info.is_small_vam:
-            return min(100, air_flow.value * self.percentage_step)
+            return min(100, round(air_flow.value * self.percentage_step))
         if air_flow == EnumControl.AirFlow.WEAK:
             return 50
         if air_flow in (EnumControl.AirFlow.MIDDLE, EnumControl.AirFlow.STRONG):
@@ -104,22 +105,21 @@ class DsVent(FanEntity):
         if percentage <= 0:
             new_status.switch = EnumControl.Switch.OFF
             Service.control_vent(self._device_info, new_status)
+            self.schedule_update_ha_state()
             return
 
         new_status.switch = EnumControl.Switch.ON
         if self._device_info.is_small_vam:
             air_flow_value = max(1, min(4, round(percentage / self.percentage_step)))
             air_flow = EnumControl.AirFlow(air_flow_value)
-        elif percentage > 66:
-            air_flow = EnumControl.AirFlow.STRONG
-        elif percentage > 33:
-            air_flow = EnumControl.AirFlow.MIDDLE
         else:
-            air_flow = EnumControl.AirFlow.WEAK
+            air_flow = (
+                EnumControl.AirFlow.WEAK
+                if percentage <= 50
+                else EnumControl.AirFlow.STRONG
+            )
 
         new_status.air_flow = air_flow
-        self._device_info.status.switch = new_status.switch
-        self._device_info.status.air_flow = air_flow
         Service.control_vent(self._device_info, new_status)
         self.schedule_update_ha_state()
 
@@ -139,7 +139,6 @@ class DsVent(FanEntity):
         else:
             mode = get_vent_mode_enum_standard_vam(preset_mode)
         new_status.mode = mode
-        self._device_info.status.mode = mode
         Service.control_vent(self._device_info, new_status)
         self.schedule_update_ha_state()
 
@@ -152,13 +151,11 @@ class DsVent(FanEntity):
 
     def turn_on(self, **kwargs) -> None:
         new_status = VentilationStatus(switch=EnumControl.Switch.ON)
-        self._device_info.status.switch = EnumControl.Switch.ON
         Service.control_vent(self._device_info, new_status)
         self.schedule_update_ha_state()
 
     def turn_off(self, **kwargs) -> None:
         new_status = VentilationStatus(switch=EnumControl.Switch.OFF)
-        self._device_info.status.switch = EnumControl.Switch.OFF
         Service.control_vent(self._device_info, new_status)
         self.schedule_update_ha_state()
 

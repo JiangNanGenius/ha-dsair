@@ -52,6 +52,7 @@ class EnumCmdType(IntEnum):
     SENSOR2_CHECK = 92
     SENSOR2_HCHOANDVOC = 93
     SYS_FILTER_CLEAN_SIGN = 9
+    SYS_FILTER_SERVICE_LIFE = 10
     SYS_FILTER_CLEAN_SIGN_RESET = 21
     SYS_GET_GW_INFO = 80
     SYS_SET_GW_INFO = 81
@@ -150,6 +151,8 @@ class EnumCmdType(IntEnum):
     HCHO_SET_INFO = 151
     HCHO_GET_SENSORS = 152
     SYS_ADDRESS_ALLOCATION = 218
+    SYS_DAIKIN_CARE_EXPONENT = 220
+    SYS_GATEWAY_SIGNAL_CHECK = 234
     SMALL_VAM_QUERY_AIR_QUALITY = 52
     SMALL_VAM_QUERY_COMPOSITE_SITUATION = 52
     SMALL_VAM_LINKAGE_CONTROL = 53
@@ -236,10 +239,11 @@ class AirFlow(IntEnum):
     STRONG = 3
     SUPER_STRONG = 4
     AUTO = 5
+    MUTE = 6
 
 
-#_AIR_FLOW_NAME_LIST = ['最弱', '稍弱', '中等', '稍强', '最强', '自动']
-_AIR_FLOW_NAME_LIST = [FAN_LOW, '稍弱', FAN_MEDIUM, '稍强', FAN_HIGH, FAN_AUTO]
+#_AIR_FLOW_NAME_LIST = ['最弱', '稍弱', '中等', '稍强', '最强', '自动', '静音']
+_AIR_FLOW_NAME_LIST = [FAN_LOW, '稍弱', FAN_MEDIUM, '稍强', FAN_HIGH, FAN_AUTO, '静音']
 
 class Breathe(IntEnum):
     CLOSE = 0
